@@ -1,0 +1,2671 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>RadioTEDU OnAir Control Surface</title>
+    <link rel="stylesheet" href="/static/css/main.css?v=20">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#120d10">
+    <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600;700;800&family=Archivo:wght@500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <img class="brand-program-icon" src="/static/icons/icon-192.png" alt="RadioTEDU OnAir">
+                <span class="logo-text" id="brandLogoText">RadioTEDU OnAir</span>
+            </div>
+            <div class="station-switcher">
+                <select id="stationSelector" class="stationSelector">
+                    <option value="1">Loading stations...</option>
+                </select>
+                <button id="stationAddBtn" class="btn-station-add" type="button" onclick="openStationCreateModal()">
+                    <span class="material-icons-round">add</span>
+                    <span>Add Station</span>
+                </button>
+            </div>
+            <div class="live-badge" id="liveBadge">
+                <span class="live-dot"></span>
+                <span>ON AIR</span>
+            </div>
+        </div>
+        <div class="header-center">
+            <div class="clock" id="clock">00:00:00</div>
+        </div>
+        <div class="header-right">
+            <div class="auth-session" id="authSession">
+                <div class="auth-session-meta">
+                    <span class="auth-session-name" id="authDisplayName">Loading user…</span>
+                    <span class="auth-session-role" id="authRole">AUTH</span>
+                </div>
+                <button class="btn-auth-logout" id="authLogoutBtn" type="button">Logout</button>
+            </div>
+            <div class="engine-status" id="engineStatus">
+                <span class="material-icons-round">power_off</span>
+                <span>Engine Off</span>
+            </div>
+            <div class="stats-mini" id="statsMini">
+                <span class="material-icons-round">library_music</span>
+                <span id="trackCount">0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN LAYOUT -->
+    <div class="main-layout">
+        <!-- SIDEBAR -->
+        <nav class="sidebar">
+            <button class="nav-btn active" data-panel="onair">
+                <span class="material-icons-round">play_circle</span>
+                <span>On Air</span>
+            </button>
+            <button class="nav-btn" data-panel="library">
+                <span class="material-icons-round">library_music</span>
+                <span>Library</span>
+            </button>
+            <button class="nav-btn" data-panel="downloads">
+                <span class="material-icons-round">download</span>
+                <span>Downloads</span>
+            </button>
+            <button class="nav-btn" data-panel="playlists">
+                <span class="material-icons-round">queue_music</span>
+                <span>Playlists</span>
+            </button>
+            <button class="nav-btn" data-panel="schedule">
+                <span class="material-icons-round">schedule</span>
+                <span>Schedule</span>
+            </button>
+            <button class="nav-btn" data-panel="ads">
+                <span class="material-icons-round">campaign</span>
+                <span>Ads</span>
+            </button>
+            <button class="nav-btn" data-panel="soundboard">
+                <span class="material-icons-round">library_music</span>
+                <span>Soundboard</span>
+            </button>
+            <button class="nav-btn" data-panel="shows">
+                <span class="material-icons-round">live_tv</span>
+                <span>Shows</span>
+            </button>
+            <button class="nav-btn" data-panel="admin-access">
+                <span class="material-icons-round">admin_panel_settings</span>
+                <span>Admin Access</span>
+            </button>
+            <button class="nav-btn" data-panel="ai-host">
+                <span class="material-icons-round">smart_toy</span>
+                <span>AI Host</span>
+            </button>
+            <button class="nav-btn" data-panel="logs">
+                <span class="material-icons-round">history</span>
+                <span>Logs</span>
+            </button>
+            <button class="nav-btn" data-panel="settings">
+                <span class="material-icons-round">settings</span>
+                <span>Settings</span>
+            </button>
+        </nav>
+
+        <!-- CONTENT AREA -->
+        <main class="content">
+            <div class="idle-timeout-banner" id="idleTimeoutBanner" hidden>
+                <div class="idle-timeout-copy">
+                    <div class="idle-timeout-title">Session expiring soon</div>
+                    <div class="idle-timeout-message" id="idleTimeoutMessage">
+                        You've been inactive. Your session expires soon.
+                    </div>
+                    <div class="idle-timeout-countdown" id="idleTimeoutCountdown">Expires in 60 seconds</div>
+                </div>
+                <button class="btn-secondary" id="idleStaySignedInBtn" type="button">Stay signed in</button>
+            </div>
+
+            <!-- ==================== ON AIR PANEL ==================== -->
+            <div class="panel active" id="panel-onair">
+                <div class="onair-mode-tabs" id="onairModeTabs">
+                    <button class="onair-mode-tab active" data-onair-mode="automation">
+                        <span class="material-icons-round">queue_music</span>
+                        <span>Automation Flow</span>
+                    </button>
+                    <button class="onair-mode-tab" data-onair-mode="program">
+                        <span class="material-icons-round">podcasts</span>
+                        <span>Radio Program Mode</span>
+                    </button>
+                </div>
+
+                <!-- NOW PLAYING -->
+                <div class="onair-grid">
+                    <!-- DECK A - Current -->
+                    <div class="deck deck-a">
+                        <div class="deck-header">
+                            <span class="deck-label">DECK A — NOW PLAYING</span>
+                            <span class="deck-time" id="deckATime">00:00 / 00:00</span>
+                        </div>
+                        <div class="deck-info">
+                            <div class="deck-title" id="deckATitle">Loading...</div>
+                            <div class="deck-artist" id="deckAArtist">—</div>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="deckAProgress" style="width: 0%"></div>
+                        </div>
+                        <div class="deck-controls">
+                            <button class="btn-deck" onclick="skipTrack()" title="Skip Track">
+                                <span class="material-icons-round">skip_next</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TALK-OVER & QUICK CONTROLS -->
+                <div class="quick-controls">
+                    <button class="btn-talkover" id="btnTalkover" onclick="activateProgramTalkMode()">
+                        <span class="material-icons-round">mic</span>
+                        <span id="btnTalkoverLabel">TALK MODE</span>
+                    </button>
+                    <button class="btn-action" onclick="triggerScan()">
+                        <span class="material-icons-round">refresh</span>
+                        <span>Scan Library</span>
+                    </button>
+                </div>
+
+                <section class="live-program-section" id="liveProgramSection">
+                    <div class="live-program-header">
+                        <div class="live-program-title">
+                            <span class="material-icons-round">radio</span>
+                            <div>
+                                <h3>Live Broadcast Console</h3>
+                                <p>Use this tab when hosts are speaking live on air.</p>
+                            </div>
+                        </div>
+                        <span class="live-program-state" id="programMusicModeLabel">Music: Normal</span>
+                    </div>
+                    <div class="live-program-controls">
+                        <button class="btn-program-mode active" data-program-music-mode="normal"
+                            onclick="setProgramMusicMode('normal')">
+                            <span class="material-icons-round">graphic_eq</span>
+                            <span>Normal Music</span>
+                        </button>
+                        <button class="btn-program-mode" data-program-music-mode="duck"
+                            onclick="setProgramMusicMode('duck')">
+                            <span class="material-icons-round">mic</span>
+                            <span>Low Background</span>
+                        </button>
+                        <button class="btn-program-mode" data-program-music-mode="mute"
+                            onclick="setProgramMusicMode('mute')">
+                            <span class="material-icons-round">volume_off</span>
+                            <span>No Music</span>
+                        </button>
+                        <button class="btn-action btn-program-exit" onclick="closeProgramMode()">
+                            <span class="material-icons-round">logout</span>
+                            <span>Exit Program Mode</span>
+                        </button>
+                    </div>
+
+                    <div id="micPanel" class="mic-panel">
+                        <div class="mic-status-bar">
+                            <div class="mic-indicator" id="micIndicator">
+                                <span class="material-icons-round">mic_off</span>
+                            </div>
+                            <span id="micStatusText">Microphone Off</span>
+                            <select id="micDeviceSelect" class="mic-device-select">
+                                <option value="">Default microphone</option>
+                            </select>
+                        </div>
+                        <div class="vu-meter-container">
+                            <div class="vu-meter">
+                                <div class="vu-meter-fill" id="vuMeterFill" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="mic-mode-selector">
+                            <button class="mic-mode-btn active" data-mode="push-to-talk" type="button">Push To Talk</button>
+                            <button class="mic-mode-btn" data-mode="always-on" type="button">Always On</button>
+                        </div>
+                        <button id="pttButton" class="ptt-button" type="button">
+                            <span class="material-icons-round">mic</span>
+                            <span class="ptt-label" id="pttButtonLabel">HOLD TO TALK</span>
+                        </button>
+                        <div class="mic-settings-grid">
+                            <label class="mic-setting" for="micGainSlider">
+                                <span class="mic-setting-label">Mic Gain</span>
+                                <div class="mic-setting-control">
+                                    <input id="micGainSlider" type="range" min="0" max="2" step="0.05" value="1">
+                                    <span id="micGainValue" class="mic-setting-value">100%</span>
+                                </div>
+                            </label>
+                            <label class="mic-setting" for="musicGainSlider">
+                                <span class="mic-setting-label">Music Gain</span>
+                                <div class="mic-setting-control">
+                                    <input id="musicGainSlider" type="range" min="0" max="2" step="0.05" value="1">
+                                    <span id="musicGainValue" class="mic-setting-value">100%</span>
+                                </div>
+                            </label>
+                            <label class="mic-setting" for="duckLevelSlider">
+                                <span class="mic-setting-label">Duck Level</span>
+                                <div class="mic-setting-control">
+                                    <input id="duckLevelSlider" type="range" min="0" max="1" step="0.05" value="0.15">
+                                    <span id="duckLevelValue" class="mic-setting-value">15%</span>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="latency-info">
+                            <span class="material-icons-round">speed</span>
+                            <span id="latencyValue">-- ms</span>
+                        </div>
+                    </div>
+
+                    <div class="live-program-workspace">
+                        <article class="live-program-card">
+                            <div class="live-program-card-head">
+                                <span class="material-icons-round">campaign</span>
+                                <span>Ad Break Countdown</span>
+                            </div>
+                            <div class="live-break-main" id="programBreakCountdown">--:--:--</div>
+                            <div class="live-break-sub" id="programBreakHeadline">No upcoming ad break.</div>
+                            <div class="live-break-list" id="programBreakList"></div>
+                        </article>
+
+                        <article class="live-program-card">
+                            <div class="live-program-card-head">
+                                <span class="material-icons-round">library_music</span>
+                                <span>Quick Music Library</span>
+                                <button class="btn-sm live-program-refresh" type="button"
+                                    onclick="loadProgramMusicLibrary(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                </button>
+                            </div>
+                            <div class="search-box live-program-search">
+                                <span class="material-icons-round">search</span>
+                                <input type="text" id="programLibrarySearch" placeholder="Search only songs..."
+                                    oninput="onProgramLibrarySearchInput()">
+                            </div>
+                            <div class="live-program-library-list" id="programLibraryList"></div>
+                        </article>
+
+                        <article class="live-program-card">
+                            <div class="live-program-card-head">
+                                <span class="material-icons-round">playlist_play</span>
+                                <span>Host Queue</span>
+                                <span class="live-program-source-badge" id="programQueueSourceBadge">Source: Automation</span>
+                                <button class="btn-sm live-program-refresh" type="button"
+                                    onclick="loadProgramQueueState(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                </button>
+                            </div>
+                            <div class="live-program-show-selector" id="programShowSelector" style="display:none">
+                                <label>Show:
+                                    <select id="programShowSelect" onchange="handleProgramShowSelect(this.value)">
+                                        <option value="">— select show —</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <!-- Show Broadcast Controls -->
+                            <div id="showBroadcastControls" style="display:none; margin-top:12px;">
+                              <div id="showBroadcastStatus" style="padding:8px 12px; border-radius:6px; margin-bottom:8px; font-weight:600; text-align:center;"></div>
+                              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button id="btnGoLive" class="btn btn-success" style="flex:1; min-width:120px; display:none;"
+                                        onclick="handleGoLive()">
+                                  <span class="material-icons" style="font-size:18px; vertical-align:middle;">play_circle</span>
+                                  Go Live
+                                </button>
+                                <button id="btnGoBreak" class="btn btn-warning" style="flex:1; min-width:120px; display:none;"
+                                        onclick="handleGoBreak()">
+                                  <span class="material-icons" style="font-size:18px; vertical-align:middle;">pause_circle</span>
+                                  Go to Break
+                                </button>
+                                <button id="btnEndShow" class="btn btn-danger" style="flex:1; min-width:120px; display:none;"
+                                        onclick="handleEndShow()">
+                                  <span class="material-icons" style="font-size:18px; vertical-align:middle;">stop_circle</span>
+                                  End Show
+                                </button>
+                              </div>
+                              <div id="showQueueWarning" style="display:none; margin-top:8px; padding:6px 10px; background:#fff3cd; color:#856404; border-radius:4px; font-size:13px;">
+                                <span class="material-icons" style="font-size:16px; vertical-align:middle;">warning</span>
+                                Queue running low — add more tracks!
+                              </div>
+                            </div>
+                            <div class="live-program-source-switch" id="programQueueSourceSwitch">
+                                <button class="btn-sm btn-program-source active" type="button"
+                                    data-program-queue-source="automation" onclick="setProgramQueueSource('automation')">
+                                    <span class="material-icons-round">queue_music</span>
+                                    <span>Automation On Air</span>
+                                </button>
+                                <button class="btn-sm btn-program-source" type="button"
+                                    data-program-queue-source="host" onclick="setProgramQueueSource('host')">
+                                    <span class="material-icons-round">mic_external_on</span>
+                                    <span>Host Queue On Air</span>
+                                </button>
+                            </div>
+                            <div class="live-program-queue-list" id="programMiniQueue"></div>
+                        </article>
+
+                        <article class="live-program-card live-soundboard-card" id="liveSoundboardCard">
+                            <div class="live-program-card-head">
+                                <span class="material-icons-round">piano</span>
+                                <span>Live Pad</span>
+                            </div>
+                            <div class="live-soundboard-status" id="liveSoundboardStatus"></div>
+                            <div class="soundboard-grid live-soundboard-grid" id="liveSoundboardGrid"></div>
+                        </article>
+
+                        <article class="live-program-card studio-panel" id="studioPanel">
+                            <div class="studio-panel-head">
+                                <div class="studio-panel-title">
+                                    <span class="material-icons-round">forum</span>
+                                    <div>
+                                        <h3>Studio Strip & Chat</h3>
+                                        <p>Read the room, select a studio, and chat when you are joined.</p>
+                                    </div>
+                                </div>
+                                <span class="studio-panel-badge" id="studioPresenceBadge">Station presence hidden</span>
+                            </div>
+                            <div class="studio-panel-layout">
+                                <section class="studio-strip-column">
+                                    <div class="studio-column-head">
+                                        <div>
+                                            <h4 id="studioSelectedTitle">Select a studio</h4>
+                                            <p id="studioSelectedMeta">No studio selected.</p>
+                                        </div>
+                                        <span class="studio-column-hint" id="studioJoinHint">Join this studio to chat</span>
+                                    </div>
+                                    <div class="studio-strip" id="studioStrip"></div>
+                                </section>
+                                <section class="studio-chat-column">
+                                    <div class="studio-column-head">
+                                        <div>
+                                            <h4>Chat History</h4>
+                                            <p>Selected studio messages stay visible for reading.</p>
+                                        </div>
+                                        <span class="studio-chat-state" id="studioChatState">Join this studio to chat</span>
+                                    </div>
+                                    <div class="studio-chat-history" id="studioChatHistory"></div>
+                                    <form class="studio-chat-composer" id="studioChatForm">
+                                        <input
+                                            id="studioChatInput"
+                                            class="studio-chat-input"
+                                            type="text"
+                                            placeholder="Join this studio to chat"
+                                            disabled
+                                        >
+                                        <button class="btn-primary btn-sm" id="studioChatSendBtn" type="submit" disabled>
+                                            Send
+                                        </button>
+                                    </form>
+                                </section>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+
+                <!-- QUEUE — Solea Tarzı Tam Kuyruk Görünümü -->
+                <div class="queue-section">
+                    <div class="queue-header">
+                        <div class="queue-header-left">
+                            <span class="material-icons-round">queue_music</span>
+                            <span>Broadcast Queue</span>
+                            <span class="queue-playlist-badge" id="queuePlaylistName">—</span>
+                        </div>
+                        <div class="queue-header-right">
+                            <span class="queue-schedule-time" id="queueScheduleTime"></span>
+                            <button class="btn-action btn-sm" onclick="loadQueue()" title="Refresh">
+                                <span class="material-icons-round">refresh</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="queue-table-wrap">
+                        <table class="queue-table" id="queueTable">
+                            <thead>
+                                <tr>
+                                    <th style="width:30px"></th>
+                                    <th style="width:35px">#</th>
+                                    <th style="width:80px">Time</th>
+                                    <th>Track</th>
+                                    <th>Artist</th>
+                                    <th style="width:65px">Duration</th>
+                                    <th style="width:55px">Type</th>
+                                    <th style="width:90px">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="queueTableBody">
+                                <!-- JS ile doldurulacak -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- CARTWALL (JINGLE BOX) -->
+                <div class="cartwall-section">
+                    <div class="section-header">
+                        <span class="material-icons-round">dashboard</span>
+                        <span>Cartwall — Jingle Box</span>
+                    </div>
+                    <div class="cartwall-grid" id="cartwallGrid">
+                        <!-- Jingle butonları JS ile doldurulacak -->
+                    </div>
+
+                    <!-- SWEEPER AYARLARI -->
+                    <div class="sweeper-settings">
+                        <div class="sweeper-header">
+                            <span class="material-icons-round" style="color:var(--orange)">graphic_eq</span>
+                            <span>Sweeper Settings</span>
+                            <span class="sweeper-jingle-count" id="sweeperJingleCount">0 jingle</span>
+                        </div>
+                        <div class="sweeper-controls">
+                            <label class="sweeper-toggle">
+                                <input type="checkbox" id="sweeperEnabled" onchange="saveSweeperConfig()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Auto Sweeper</span>
+                            </label>
+                            <div class="sweeper-interval">
+                                <label>Every</label>
+                                <select id="sweeperInterval" onchange="saveSweeperConfig()">
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="3" selected>3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                </select>
+                                <label>songs play a jingle</label>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- ==================== KÜTÜPHANE PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-library">
+                <div class="panel-header">
+                    <h2>Music Library</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" onclick="loadLibrary(); loadLibraryFilterOptions()">
+                            <span class="material-icons-round">refresh</span>
+                            Refresh Library
+                        </button>
+                    </div>
+                </div>
+
+                <div class="subpage-tabs" data-group="library">
+                    <button class="subpage-tab active" data-subpage="catalog">
+                        <span class="material-icons-round">library_music</span>
+                        <span>Catalog</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="automation">
+                        <span class="material-icons-round">rule</span>
+                        <span>Metadata</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="operations">
+                        <span class="material-icons-round">tune</span>
+                        <span>Operations</span>
+                    </button>
+                </div>
+
+                <div class="subpage-view active" data-group="library" data-subpage="catalog">
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Search & Filters</h3>
+                            <p>Filter tracks and manage source scope.</p>
+                        </div>
+                        <div class="filters-bar">
+                            <div class="search-box">
+                                <span class="material-icons-round">search</span>
+                                <input type="text" id="searchInput" placeholder="Search track, artist, or album..."
+                                    oninput="searchTracks()">
+                            </div>
+                            <select id="filterArtist" onchange="searchTracks()">
+                                <option value="">All Artists</option>
+                            </select>
+                            <select id="filterGenre" onchange="searchTracks()">
+                                <option value="">All Genres</option>
+                            </select>
+                            <select id="filterLanguage" onchange="searchTracks()">
+                                <option value="">All Languages</option>
+                            </select>
+                            <select id="filterType" onchange="searchTracks()">
+                                <option value="">All Types</option>
+                                <option value="music">Music</option>
+                                <option value="jingle">Jingle</option>
+                                <option value="ad">Ad</option>
+                            </select>
+                            <select id="libraryScope" onchange="onLibraryScopeChanged()">
+                                <option value="local">Current Station Library</option>
+                                <option value="station">Specific Station Library</option>
+                                <option value="all">All Stations (Shared)</option>
+                            </select>
+                            <select id="librarySourceStation" onchange="onLibrarySourceStationChanged()" disabled>
+                                <option value="">Select station...</option>
+                            </select>
+                        </div>
+                    </section>
+
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Library Tracks</h3>
+                            <p>Main catalog table with paging.</p>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="track-table">
+                                <thead>
+                                    <tr>
+                                        <th>Title</th>
+                                        <th>Artist</th>
+                                        <th>Album</th>
+                                        <th>Genre</th>
+                                        <th>BPM</th>
+                                        <th>Duration</th>
+                                        <th>Type</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="trackTableBody">
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="pagination" id="pagination"></div>
+                    </section>
+                </div>
+
+                <div class="subpage-view" data-group="library" data-subpage="automation">
+                    <details class="workspace-disclosure" open>
+                        <summary>
+                            <span class="material-icons-round">rule</span>
+                            <span>Metadata Automation Rules</span>
+                        </summary>
+                        <div class="workspace-disclosure-body">
+                            <div class="import-card">
+                                <div class="import-card-head">
+                                    <div class="import-card-title">
+                                        <span class="material-icons-round">rule</span>
+                                        <span>Metadata Automation Rules</span>
+                                    </div>
+                                    <div class="import-card-sub">
+                                        Rule engine + optional iTunes verification for automatic metadata cleanup.
+                                    </div>
+                                </div>
+
+                                <div class="import-grid">
+                                    <div class="import-field">
+                                        <label for="metadataRuleScope">Rule Scope</label>
+                                        <select id="metadataRuleScope">
+                                            <option value="station" selected>Current Station</option>
+                                            <option value="global">Global (All Stations)</option>
+                                        </select>
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataRuleName">Rule Name</label>
+                                        <input type="text" id="metadataRuleName"
+                                            placeholder="Example: Remove Official Video">
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataRuleField">Target Field</label>
+                                        <select id="metadataRuleField">
+                                            <option value="title" selected>Title</option>
+                                            <option value="artist">Artist</option>
+                                            <option value="album">Album</option>
+                                            <option value="genre">Genre</option>
+                                            <option value="language">Language</option>
+                                            <option value="all">All Fields</option>
+                                        </select>
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataRuleMatchType">Match Type</label>
+                                        <select id="metadataRuleMatchType">
+                                            <option value="contains" selected>Contains</option>
+                                            <option value="regex">Regex</option>
+                                            <option value="equals">Equals</option>
+                                            <option value="prefix">Prefix</option>
+                                            <option value="suffix">Suffix</option>
+                                        </select>
+                                    </div>
+                                    <div class="import-field import-field-wide">
+                                        <label for="metadataRulePattern">Pattern</label>
+                                        <input type="text" id="metadataRulePattern" placeholder="Example: (Official Video)">
+                                    </div>
+                                    <div class="import-field import-field-wide">
+                                        <label for="metadataRuleReplacement">Replacement</label>
+                                        <input type="text" id="metadataRuleReplacement" placeholder="Leave empty to remove">
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataRulePriority">Priority</label>
+                                        <input type="number" id="metadataRulePriority" value="100" min="-1000" max="1000"
+                                            step="1">
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataRuleCaseSensitive">Case Sensitive</label>
+                                        <div class="import-inline-checks">
+                                            <label><input type="checkbox" id="metadataRuleCaseSensitive"> Sensitive</label>
+                                        </div>
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataUseItunes">External Verify</label>
+                                        <div class="import-inline-checks">
+                                            <label><input type="checkbox" id="metadataUseItunes" checked> Use iTunes
+                                                Verify</label>
+                                        </div>
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataItunesCountry">iTunes Country</label>
+                                        <input type="text" id="metadataItunesCountry" value="TR" maxlength="2"
+                                            placeholder="TR">
+                                    </div>
+                                    <div class="import-field">
+                                        <label for="metadataItunesConfidence">iTunes Min Confidence</label>
+                                        <input type="number" id="metadataItunesConfidence" value="0.88" min="0.50"
+                                            max="0.99" step="0.01">
+                                    </div>
+                                </div>
+
+                                <div class="import-actions">
+                                    <button class="btn-action" onclick="createMetadataRule()">
+                                        <span class="material-icons-round">add_circle</span>
+                                        Add Rule
+                                    </button>
+                                    <button class="btn-action" onclick="loadMetadataRules()">
+                                        <span class="material-icons-round">refresh</span>
+                                        Refresh Rules
+                                    </button>
+                                    <button class="btn-action" onclick="normalizeLibraryMetadata()">
+                                        <span class="material-icons-round">auto_fix_high</span>
+                                        Run Fix Across Scope
+                                    </button>
+                                </div>
+                                <div class="import-result" id="metadataRuleResult">No metadata rule action yet.</div>
+
+                                <div class="table-wrapper">
+                                    <table class="track-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Scope</th>
+                                                <th>Target</th>
+                                                <th>Match</th>
+                                                <th>Pattern</th>
+                                                <th>Replacement</th>
+                                                <th>Priority</th>
+                                                <th>Active</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="metadataRulesTableBody">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <div class="subpage-view" data-group="library" data-subpage="operations">
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Library Operations</h3>
+                            <p>Batch scan, cleanup and analysis tools.</p>
+                        </div>
+                        <div class="import-field import-field-wide">
+                            <label for="scanFolderPath">Folder to scan</label>
+                            <input id="scanFolderPath" type="text"
+                                   placeholder="Enter an absolute media folder path">
+                            <label class="settings-checkbox" for="scanFolderRecursive">
+                                <input id="scanFolderRecursive" type="checkbox" checked>
+                                Include subfolders
+                            </label>
+                        </div>
+                        <div class="library-ops-actions">
+                            <button class="btn-action" onclick="triggerScan()">
+                                <span class="material-icons-round">refresh</span>
+                                Scan Folders
+                            </button>
+                            <button class="btn-action" onclick="normalizeLibraryMetadata()">
+                                <span class="material-icons-round">auto_fix_high</span>
+                                Auto Metadata Fix
+                            </button>
+                            <button class="btn-action" onclick="analyzeLibraryBpm()">
+                                <span class="material-icons-round">speed</span>
+                                Analyze BPM
+                            </button>
+                            <button class="btn-action" onclick="triggerScanAndTrim()">
+                                <span class="material-icons-round">auto_fix_high</span>
+                                Scan + Auto Clean
+                            </button>
+                            <button class="btn-action" onclick="trimFilteredTracks()">
+                                <span class="material-icons-round">content_cut</span>
+                                Trim Filtered
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- ==================== DOWNLOADS PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-downloads">
+                <div class="panel-header">
+                    <h2>Downloads</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" onclick="loadYtDlpSettings(true); loadYtDlpQueueStatus(false)">
+                            <span class="material-icons-round">refresh</span>
+                            Refresh Tools
+                        </button>
+                    </div>
+                </div>
+
+                <div class="subpage-tabs" data-group="downloads">
+                    <button class="subpage-tab active" data-subpage="imports">
+                        <span class="material-icons-round">download</span>
+                        <span>Imports</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="queue">
+                        <span class="material-icons-round">format_list_numbered</span>
+                        <span>Queue</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="recent">
+                        <span class="material-icons-round">history</span>
+                        <span>Recent Jobs</span>
+                    </button>
+                </div>
+
+                <div class="subpage-view active" data-group="downloads" data-subpage="imports">
+                    <div class="workspace-grid workspace-grid-two">
+                        <div class="import-card">
+                            <div class="import-card-head">
+                                <div class="import-card-title">
+                                    <span class="material-icons-round">download</span>
+                                    <span>URL Import (yt-dlp)</span>
+                                </div>
+                                <div class="import-card-sub" id="ytDlpBinaryStatus">Checking yt-dlp...</div>
+                            </div>
+
+                            <div class="import-grid">
+                                <div class="import-field import-field-wide">
+                                    <label for="ytDlpUrl">Source URL</label>
+                                    <input type="url" id="ytDlpUrl" placeholder="https://...">
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpTrackType">Track Type</label>
+                                    <select id="ytDlpTrackType">
+                                        <option value="music">Music</option>
+                                        <option value="jingle">Jingle</option>
+                                        <option value="ad">Ad</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpTargetStation">Target Station</label>
+                                    <select id="ytDlpTargetStation">
+                                        <option value="1">Main Radio</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpAudioFormat">Audio Format</label>
+                                    <select id="ytDlpAudioFormat">
+                                        <option value="mp3">MP3</option>
+                                        <option value="m4a">M4A</option>
+                                        <option value="opus">Opus</option>
+                                        <option value="wav">WAV</option>
+                                        <option value="flac">FLAC</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpAudioQuality">Audio Quality</label>
+                                    <select id="ytDlpAudioQuality">
+                                        <option value="320">320 kbps</option>
+                                        <option value="256">256 kbps</option>
+                                        <option value="192">192 kbps</option>
+                                        <option value="160">160 kbps</option>
+                                        <option value="128">128 kbps</option>
+                                        <option value="96">96 kbps</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpTrimThreshold">Trim Threshold (dB)</label>
+                                    <input type="number" id="ytDlpTrimThreshold" value="-45" min="-90" max="-5" step="1">
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpTrimMinSilence">Min Silence (s)</label>
+                                    <input type="number" id="ytDlpTrimMinSilence" value="0.15" min="0" max="3" step="0.01">
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpIntroPreset">Intro Clean Preset</label>
+                                    <select id="ytDlpIntroPreset">
+                                        <option value="soft">Soft</option>
+                                        <option value="normal" selected>Normal</option>
+                                        <option value="aggressive">Aggressive</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="ytDlpIntroMaxCut">Intro Max Cut (s)</label>
+                                    <input type="number" id="ytDlpIntroMaxCut" value="18" min="2" max="60" step="0.5">
+                                </div>
+                            </div>
+
+                            <div class="import-actions">
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="ytDlpPlaylist">
+                                    <span>Allow Playlist Download</span>
+                                </label>
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="ytDlpMusicOnly" checked>
+                                    <span>Music-Only (Raw/Radio Edit)</span>
+                                </label>
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="ytDlpAutoTrim" checked>
+                                    <span>Auto Trim Silence</span>
+                                </label>
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="ytDlpAutoIntroClean" checked>
+                                    <span>Auto Remove Clip Intro</span>
+                                </label>
+                                <button class="btn-action" id="ytDlpImportBtn" onclick="downloadWithYtDlp()">
+                                    <span class="material-icons-round">cloud_download</span>
+                                    Download and Import
+                                </button>
+                            </div>
+
+                            <div class="import-status" id="ytDlpStatus">Ready</div>
+                            <div class="import-result" id="ytDlpResult">No completed import yet.</div>
+                            <div class="import-hint">Note: MP3 transcoding and auto intro cleanup require FFmpeg. Without
+                                FFmpeg, direct audio stream import is used.</div>
+                        </div>
+
+                        <div class="import-card">
+                            <div class="import-card-head">
+                                <div class="import-card-title">
+                                    <span class="material-icons-round">upload_file</span>
+                                    <span>Local File Upload</span>
+                                </div>
+                                <div class="import-card-sub">Upload songs/jingles/ads directly into a selected station
+                                    library.</div>
+                            </div>
+
+                            <div class="import-grid">
+                                <div class="import-field import-field-wide">
+                                    <label for="uploadImportFiles">Audio Files</label>
+                                    <input type="file" id="uploadImportFiles"
+                                        accept=".mp3,.mp4,.ogg,.flac,.wav,.wma,.aac,.m4a,.opus" multiple>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="uploadTrackType">Track Type</label>
+                                    <select id="uploadTrackType">
+                                        <option value="music">Music</option>
+                                        <option value="jingle">Jingle</option>
+                                        <option value="ad">Ad</option>
+                                    </select>
+                                </div>
+
+                                <div class="import-field">
+                                    <label for="uploadTargetStation">Target Station</label>
+                                    <select id="uploadTargetStation">
+                                        <option value="1">Main Radio</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="import-actions">
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="uploadAutoTrim" checked>
+                                    <span>Auto Trim Silence</span>
+                                </label>
+                                <label class="import-toggle">
+                                    <input type="checkbox" id="uploadAutoIntroClean" checked>
+                                    <span>Auto Remove Clip Intro</span>
+                                </label>
+                                <button class="btn-action" id="uploadImportBtn" onclick="uploadLibraryFiles()">
+                                    <span class="material-icons-round">upload</span>
+                                    Upload and Import
+                                </button>
+                            </div>
+
+                            <div class="import-status" id="uploadImportStatus">Ready</div>
+                            <div class="import-result" id="uploadImportResult">No upload job yet.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="subpage-view" data-group="downloads" data-subpage="queue">
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Download Queue</h3>
+                            <p id="ytDlpQueueSummary">Loading queue...</p>
+                        </div>
+                        <div class="table-wrapper import-queue-table-wrap">
+                            <table class="track-table import-queue-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:70px">Order</th>
+                                        <th style="width:110px">Status</th>
+                                        <th style="width:120px">Phase</th>
+                                        <th>URL</th>
+                                        <th style="width:80px">Type</th>
+                                        <th style="width:90px">Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ytDlpQueueBody">
+                                    <tr>
+                                        <td colspan="6" class="queue-empty-cell">Loading queue...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="import-hint">Queue is shared system-wide. Order #1 is currently running.</div>
+                    </section>
+                </div>
+
+                <div class="subpage-view" data-group="downloads" data-subpage="recent">
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Recent Jobs</h3>
+                            <p>Latest completed or failed imports.</p>
+                        </div>
+                        <div class="table-wrapper import-queue-table-wrap">
+                            <table class="track-table import-queue-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:125px">Job ID</th>
+                                        <th style="width:110px">Status</th>
+                                        <th style="width:120px">Phase</th>
+                                        <th>URL</th>
+                                        <th style="width:80px">Type</th>
+                                        <th style="width:90px">Time</th>
+                                        <th style="width:190px">Result</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ytDlpRecentBody">
+                                    <tr>
+                                        <td colspan="7" class="queue-empty-cell">No recent jobs.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+            </div>
+            <!-- ==================== PLAYLIST PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-playlists">
+                <div class="panel-header">
+                    <h2>Playlists</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" onclick="showAutoPlaylistModal()">
+                            <span class="material-icons-round">auto_awesome</span>
+                            Auto Playlist
+                        </button>
+                        <button class="btn-action" onclick="showCreatePlaylist()">
+                            <span class="material-icons-round">add</span>
+                            New Playlist
+                        </button>
+                    </div>
+                </div>
+                <section class="workspace-card">
+                    <div class="workspace-card-head">
+                        <h3>Playlist Library</h3>
+                        <p>Create and manage playlists from one clean list view.</p>
+                    </div>
+                    <div class="playlist-grid" id="playlistGrid">
+                        <!-- JS ile doldurulacak -->
+                    </div>
+                </section>
+                <!-- Playlist detail modal -->
+                <div class="modal-overlay" id="playlistModal" style="display:none">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 id="playlistModalTitle">Playlist</h3>
+                            <div style="display:flex;align-items:center;gap:8px">
+                                <button class="btn-sm delete-btn" onclick="deleteCurrentPlaylist()"
+                                    title="Delete Playlist">
+                                    <span class="material-icons-round">delete</span>
+                                </button>
+                                <button class="btn-close" onclick="closePlaylistModal()">
+                                    <span class="material-icons-round">close</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="modal-body" id="playlistModalBody"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== SCHEDULE PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-schedule">
+                <div class="panel-header">
+                    <h2>Broadcast Schedule</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" onclick="showCreateSchedule()">
+                            <span class="material-icons-round">add</span>
+                            New Schedule
+                        </button>
+                    </div>
+                </div>
+                <section class="workspace-card">
+                    <div class="workspace-card-head">
+                        <h3>Daily Timeline</h3>
+                        <p>Visual timeline for active schedule blocks.</p>
+                    </div>
+                    <!-- 24-HOUR TIMELINE -->
+                    <div class="timeline-container">
+                        <div class="timeline-header">
+                            <h3>
+                                <span class="material-icons-round">calendar_today</span>
+                                Daily Broadcast Schedule
+                            </h3>
+                            <span class="timeline-day-label" id="timelineDayLabel">Today</span>
+                        </div>
+                        <div class="timeline-grid" id="timelineGrid">
+                            <div class="timeline-hours" id="timelineHours"></div>
+                            <div class="timeline-blocks" id="timelineBlocks"></div>
+                            <div class="timeline-now-line" id="timelineNow" style="display:none"></div>
+                        </div>
+                    </div>
+                </section>
+                <section class="workspace-card">
+                    <div class="workspace-card-head">
+                        <h3>Schedule Entries</h3>
+                        <p>List view for editing and deleting existing schedule items.</p>
+                    </div>
+                    <!-- SCHEDULE ENTRIES LIST -->
+                    <div class="schedule-entries" id="scheduleEntries">
+                        <!-- JS ile doldurulacak -->
+                    </div>
+                </section>
+            </div>
+
+            <!-- ==================== ADS PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-ads">
+                <div class="panel-header">
+                    <h2>Ad Planner</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" onclick="loadAdsPanelData(true)">
+                            <span class="material-icons-round">refresh</span>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+                <div class="subpage-tabs" data-group="ads">
+                    <button class="subpage-tab active" data-subpage="overview">
+                        <span class="material-icons-round">insights</span>
+                        <span>Overview</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="breaksets">
+                        <span class="material-icons-round">view_timeline</span>
+                        <span>Break Sets</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="campaigns">
+                        <span class="material-icons-round">campaign</span>
+                        <span>Campaigns</span>
+                    </button>
+                </div>
+
+                <div class="subpage-view active" data-group="ads" data-subpage="overview">
+                    <section class="ads-overview-grid">
+                        <div class="ads-kpi-card">
+                            <div class="ads-kpi-label">Due Slots</div>
+                            <div class="ads-kpi-value" id="adsKpiDue">0</div>
+                        </div>
+                        <div class="ads-kpi-card">
+                            <div class="ads-kpi-label">Campaigns</div>
+                            <div class="ads-kpi-value" id="adsKpiCampaigns">0</div>
+                        </div>
+                        <div class="ads-kpi-card">
+                            <div class="ads-kpi-label">Daily Revenue</div>
+                            <div class="ads-kpi-value" id="adsKpiDailyRevenue">$0.00</div>
+                        </div>
+                        <div class="ads-kpi-card">
+                            <div class="ads-kpi-label">Last 30d Revenue</div>
+                            <div class="ads-kpi-value" id="adsKpiMonthlyRevenue">$0.00</div>
+                        </div>
+                    </section>
+                    <div class="ads-empty-state" id="adsPanelHint" style="display:none"></div>
+
+                    <section class="workspace-card ads-pricing-card">
+                        <div class="workspace-card-head">
+                            <h3>Total Revenue</h3>
+                            <p>Revenue summary from campaign schedules (last 30 days).</p>
+                        </div>
+                        <label class="settings-checkbox ads-revenue-toggle">
+                            <input type="checkbox" id="adsPricingActiveOnly" checked>
+                            <span>Only Active Campaigns</span>
+                        </label>
+                        <div class="ads-pricing-summary" id="adsPricingSummary">
+                            Revenue shows last 30-day estimate.
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="track-table ads-pricing-table">
+                                <thead>
+                                    <tr>
+                                        <th>Campaign</th>
+                                        <th style="width:95px">Ad Sec</th>
+                                        <th style="width:110px">Price/Play</th>
+                                        <th style="width:90px">Today</th>
+                                        <th style="width:110px">Last 30d</th>
+                                        <th style="width:130px">Daily Revenue</th>
+                                        <th style="width:140px">Revenue (30d)</th>
+                                        <th>Formula</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adsPricingTableBody">
+                                    <tr>
+                                        <td colspan="8" style="text-align:center;color:var(--text-muted)">Loading pricing
+                                            model...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <div class="ads-card ads-runtime-card">
+                        <div class="ads-card-header">
+                            <h3>
+                                <span class="material-icons-round">av_timer</span>
+                                Runtime Preview
+                            </h3>
+                            <span class="ads-runtime-now" id="adsRuntimeNow">—</span>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="track-table ads-runtime-table">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4">Due Slots (Not Played)</th>
+                                    </tr>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Break Set</th>
+                                        <th>Campaigns</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adsRuntimeDueBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="track-table ads-runtime-table">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4">Upcoming Slots</th>
+                                    </tr>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Break Set</th>
+                                        <th>Campaigns</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adsRuntimeNextBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="ads-history" id="adsRuntimeHistory"></div>
+                    </div>
+                </div>
+
+                <div class="subpage-view" data-group="ads" data-subpage="breaksets">
+                    <div class="ads-card">
+                        <div class="ads-card-header">
+                            <h3>
+                                <span class="material-icons-round">view_timeline</span>
+                                Ad Break Sets
+                            </h3>
+                            <span class="ads-editor-label" id="adBreakSetEditorLabel">New Set</span>
+                        </div>
+                        <div class="ads-form-grid">
+                            <div class="form-group">
+                                <label>Set Name</label>
+                                <input type="text" id="adBreakSetName" placeholder="Drive Time Breaks">
+                            </div>
+                            <div class="form-group">
+                                <label>Description</label>
+                                <input type="text" id="adBreakSetDescription" placeholder="Optional">
+                            </div>
+                            <div class="form-group">
+                                <label>Entry Jingle</label>
+                                <select id="adBreakSetIntroJingle">
+                                    <option value="">No Entry Jingle</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Exit Jingle</label>
+                                <select id="adBreakSetOutroJingle">
+                                    <option value="">No Exit Jingle</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Slot Times (HH:MM)</label>
+                                <input type="text" id="adBreakSetSlots" placeholder="08,10,12 or 08:30,10:00,18:30">
+                            </div>
+                            <div class="form-group">
+                                <label>Days</label>
+                                <select id="adBreakSetDays">
+                                    <option value="*">Every Day</option>
+                                    <option value="0,1,2,3,4">Weekdays</option>
+                                    <option value="5,6">Weekend</option>
+                                    <option value="0">Monday</option>
+                                    <option value="1">Tuesday</option>
+                                    <option value="2">Wednesday</option>
+                                    <option value="3">Thursday</option>
+                                    <option value="4">Friday</option>
+                                    <option value="5">Saturday</option>
+                                    <option value="6">Sunday</option>
+                                </select>
+                            </div>
+                            <label class="settings-checkbox">
+                                <input type="checkbox" id="adBreakSetActive" checked>
+                                <span>Set Active</span>
+                            </label>
+                        </div>
+                        <div class="ads-quick-block">
+                            <div class="ads-quick-title">Quick Presets</div>
+                            <div class="ads-quick-actions">
+                                <button class="btn-sm" onclick="applyAdBreakPreset('morning')">Morning</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('drive')">Drive Time</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('hourly')">Hourly</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('half_hour')">Every 30 min</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('quarter_hour')">Every 15
+                                    min</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('forty_five')">Every 45 min</button>
+                                <button class="btn-sm" onclick="applyAdBreakPreset('weekend')">Weekend</button>
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-secondary" onclick="resetAdBreakSetForm()">Reset</button>
+                            <button class="btn-primary" onclick="saveAdBreakSet()">Save Break Set</button>
+                        </div>
+                        <div class="ads-list" id="adBreakSetsList"></div>
+                    </div>
+                </div>
+
+                <div class="subpage-view" data-group="ads" data-subpage="campaigns">
+                    <div class="ads-card">
+                        <div class="ads-card-header">
+                            <h3>
+                                <span class="material-icons-round">campaign</span>
+                                New Campaign
+                            </h3>
+                            <span class="ads-editor-label" id="adCampaignEditorLabel">New Campaign</span>
+                        </div>
+                        <div class="ads-form-grid">
+                            <div class="form-group">
+                                <label>Campaign Name</label>
+                                <input type="text" id="adCampaignName" placeholder="Morning Sponsor">
+                            </div>
+                            <div class="form-group">
+                                <label>Start Date</label>
+                                <input type="date" id="adCampaignStart">
+                            </div>
+                            <div class="form-group">
+                                <label>End Date</label>
+                                <input type="date" id="adCampaignEnd">
+                            </div>
+                            <div class="form-group">
+                                <label>Break Sets</label>
+                                <select id="adCampaignBreakSets" multiple size="7"></select>
+                                <div class="ads-quick-actions">
+                                    <button class="btn-sm" type="button" onclick="selectAllCampaignBreakSets()">Select
+                                        All Sets</button>
+                                    <button class="btn-sm" type="button" onclick="clearCampaignBreakSets()">Clear</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Ad Track</label>
+                                <select id="adCampaignTracks"></select>
+                            </div>
+                            <div class="ads-advanced settings-form-wide">
+                                <details>
+                                    <summary>Advanced Campaign Options</summary>
+                                    <div class="ads-advanced-grid">
+                                        <div class="form-group">
+                                            <label>Day Interval</label>
+                                            <input type="number" id="adCampaignDayInterval" min="1" max="60" step="1"
+                                                value="1">
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Daily Repeat Limit</label>
+                                            <input type="number" id="adCampaignDailyLimit" min="0" max="200" step="1"
+                                                value="0">
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Priority</label>
+                                            <input type="number" id="adCampaignPriority" min="-100" max="100" step="1"
+                                                value="0">
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Notes</label>
+                                            <input type="text" id="adCampaignNotes"
+                                                placeholder="Optional notes for campaign">
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+                            <div class="ads-advanced ads-pricing-advanced settings-form-wide">
+                                <details>
+                                    <summary>Ad Track Pricing</summary>
+                                    <div class="ads-pricing-inline-body">
+                                        <p class="ads-help-text">Set per-ad pricing mode for the selected ad track.
+                                        </p>
+                                        <div class="ads-pricing-track-wrap">
+                                            <div class="ads-pricing-track-head">Ad Based Pricing (Auto Free by default)</div>
+                                            <div class="table-wrapper">
+                                                <table class="track-table ads-track-pricing-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Ad Track</th>
+                                                            <th style="width:90px">Sec</th>
+                                                            <th style="width:95px">Auto Free</th>
+                                                            <th style="width:140px">Pricing Mode</th>
+                                                            <th style="width:140px">Price</th>
+                                                            <th style="width:120px">Price / Play</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="adsPricingTrackBody">
+                                                        <tr>
+                                                            <td colspan="6" style="text-align:center;color:var(--text-muted)">Loading ad tracks...
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+                            <label class="settings-checkbox">
+                                <input type="checkbox" id="adCampaignActive" checked>
+                                <span>Campaign Active</span>
+                            </label>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-secondary" onclick="resetAdCampaignForm()">Reset</button>
+                            <button class="btn-primary" onclick="saveAdCampaign()">Save Campaign</button>
+                        </div>
+                    </div>
+                    <div class="ads-card">
+                        <div class="ads-card-header">
+                            <h3>
+                                <span class="material-icons-round">check_circle</span>
+                                Active Campaigns
+                            </h3>
+                            <span class="ads-editor-label" id="adCampaignActiveCount">0 Active</span>
+                        </div>
+                        <div class="ads-list" id="adCampaignList"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== SOUNDBOARD PANEL ==================== -->
+            <div id="panel-soundboard" class="panel">
+                <h2>Sound Board</h2>
+                <div class="soundboard-manage" id="soundboardManagePanel">
+                    <div class="soundboard-manage-grid">
+                        <label class="soundboard-field">
+                            <span>Name</span>
+                            <input type="text" id="soundboardNameInput" placeholder="Morning Sting">
+                        </label>
+                        <label class="soundboard-field">
+                            <span>Color</span>
+                            <input type="color" id="soundboardColorInput" value="#4a90d9">
+                        </label>
+                        <label class="soundboard-field">
+                            <span>Hotkey</span>
+                            <input type="text" id="soundboardHotkeyInput" maxlength="1" placeholder="1">
+                        </label>
+                        <label class="soundboard-field">
+                            <span>Category</span>
+                            <input type="text" id="soundboardCategoryInput" placeholder="Jingle">
+                        </label>
+                        <label class="soundboard-field soundboard-field-wide">
+                            <span>Audio File</span>
+                            <input type="file" id="soundboardFileInput" accept="audio/*">
+                        </label>
+                    </div>
+                    <div class="soundboard-manage-actions">
+                        <button class="btn-action" type="button" id="soundboardUploadBtn">
+                            <span class="material-icons-round">upload_file</span>
+                            Upload Audio
+                        </button>
+                        <button class="btn-primary" type="button" id="soundboardSaveBtn">
+                            <span class="material-icons-round">save</span>
+                            Save Item
+                        </button>
+                        <button class="btn-secondary" type="button" id="soundboardResetBtn">
+                            Reset
+                        </button>
+                    </div>
+                    <div class="soundboard-manage-status" id="soundboardManageStatus">Ready</div>
+                </div>
+                <div class="soundboard-grid" id="soundboardGrid"></div>
+            </div>
+
+            <!-- ==================== SHOWS PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-shows">
+                <div class="panel-header">
+                    <h2>Show Management</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" type="button" id="showCreateBtn" onclick="openShowCreateModal()">
+                            <span class="material-icons-round">add</span>
+                            New Show
+                        </button>
+                    </div>
+                </div>
+                <div class="shows-list" id="showsList"></div>
+
+                <!-- Create/Edit Show Modal -->
+                <dialog id="showModal" class="modal">
+                    <form id="showForm" class="modal-form" onsubmit="return handleShowFormSubmit(event)">
+                        <h3 id="showModalTitle">New Show</h3>
+                        <input type="hidden" id="showFormId" value="">
+                        <label>Name <input type="text" id="showFormName" required></label>
+                        <label>Description <textarea id="showFormDesc" rows="2"></textarea></label>
+                        <label>Color <input type="color" id="showFormColor" value="#4a90d9"></label>
+                        <div class="modal-actions">
+                            <button type="button" class="btn-secondary" onclick="document.getElementById('showModal').close()">Cancel</button>
+                            <button type="submit" class="btn-primary">Save</button>
+                        </div>
+                    </form>
+                </dialog>
+
+                <!-- Show Detail Modal (assignments + audio uploads) -->
+                <dialog id="showDetailModal" class="modal modal-wide">
+                    <div class="modal-form">
+                        <h3 id="showDetailTitle">Show Details</h3>
+                        <section class="show-detail-section">
+                            <h4>Assigned Users</h4>
+                            <div id="showAssignmentsList"></div>
+                            <div class="show-assign-row">
+                                <select id="showAssignUserId"></select>
+                                <select id="showAssignRole">
+                                    <option value="dj">DJ</option>
+                                    <option value="producer">Producer</option>
+                                </select>
+                                <button type="button" class="btn-sm btn-primary" onclick="handleAssignUser()">Assign</button>
+                            </div>
+                        </section>
+                        <section class="show-detail-section">
+                            <h4>Audio Assets</h4>
+                            <div class="show-audio-uploads">
+                                <label>Intro <input type="file" accept="audio/*" onchange="handleShowAudioUpload(this, 'intro')"></label>
+                                <label>Outro <input type="file" accept="audio/*" onchange="handleShowAudioUpload(this, 'outro')"></label>
+                                <label>Break Outro <input type="file" accept="audio/*" onchange="handleShowAudioUpload(this, 'break_outro')"></label>
+                                <label>Break Intro <input type="file" accept="audio/*" onchange="handleShowAudioUpload(this, 'break_intro')"></label>
+                            </div>
+                        </section>
+                        <div class="modal-actions">
+                            <button type="button" class="btn-secondary" onclick="document.getElementById('showDetailModal').close()">Close</button>
+                        </div>
+                    </div>
+                </dialog>
+            </div>
+
+            <!-- ==================== ADMIN ACCESS PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-admin-access">
+                <div class="panel-header">
+                    <h2>Admin Access</h2>
+                </div>
+                <div class="subpage-tabs" data-group="admin-access">
+                    <button class="subpage-tab active" data-subpage="users">
+                        <span class="material-icons-round">group</span>
+                        <span>Users</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="roles">
+                        <span class="material-icons-round">badge</span>
+                        <span>Roles</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="program-assignments">
+                        <span class="material-icons-round">assignment_ind</span>
+                        <span>Program Assignments</span>
+                    </button>
+                    <button class="subpage-tab" data-subpage="stations">
+                        <span class="material-icons-round">radio</span>
+                        <span>Stations</span>
+                    </button>
+                </div>
+
+                <div class="subpage-view active" data-group="admin-access" data-subpage="users">
+                    <section class="workspace-card admin-access-card users-management-shell">
+                        <div class="workspace-card-head">
+                            <div>
+                                <h3>Users</h3>
+                                <p>Manage users, assign role templates, and review effective permissions.</p>
+                            </div>
+                            <div class="user-management-toolbar">
+                                <button class="btn-secondary" type="button" onclick="loadUsers(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                    <span>Refresh</span>
+                                </button>
+                                <button class="btn-primary" type="button" onclick="openUserCreateModal()">
+                                    <span class="material-icons-round">person_add</span>
+                                    <span>New User</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="users-management-grid">
+                            <article class="workspace-card users-list-card">
+                                <div class="workspace-card-head">
+                                    <h3>User List</h3>
+                                    <p>Select a user to inspect their effective permissions.</p>
+                                </div>
+                                <div id="userList" class="user-list" aria-live="polite">
+                                    <div class="admin-access-empty">Loading users...</div>
+                                </div>
+                            </article>
+
+                            <article class="workspace-card users-summary-card">
+                                <div class="workspace-card-head">
+                                    <h3>Effective Permissions</h3>
+                                    <p>Union of the selected user's role templates and inherited grants.</p>
+                                </div>
+                                <div id="effectivePermissionsPreview" class="user-permissions-preview">
+                                    <div class="user-preview-empty">Select a user to inspect their permissions.</div>
+                                </div>
+                            </article>
+                        </div>
+                    </section>
+                </div>
+
+                <div class="subpage-view" data-group="admin-access" data-subpage="roles">
+                    <section class="workspace-card admin-access-card roles-management-shell">
+                        <div class="workspace-card-head">
+                            <div>
+                                <h3>Roles</h3>
+                                <p>Manage reusable role templates and bundle global permissions from the RBAC catalog.</p>
+                            </div>
+                            <div class="role-template-toolbar">
+                                <button class="btn-secondary" type="button" onclick="loadRoleTemplates(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                    <span>Refresh</span>
+                                </button>
+                                <button class="btn-primary" type="button" onclick="openRoleTemplateCreateModal()">
+                                    <span class="material-icons-round">add</span>
+                                    <span>New Role</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="roles-management-grid">
+                            <article class="workspace-card roles-list-card">
+                                <div class="workspace-card-head">
+                                    <h3>Role Templates</h3>
+                                    <p>Templates shown here can be edited or deactivated.</p>
+                                </div>
+                                <div id="roleTemplateList" class="role-template-list" aria-live="polite">
+                                    <div class="role-template-empty">Loading role templates...</div>
+                                </div>
+                            </article>
+
+                            <article class="workspace-card roles-summary-card">
+                                <div class="workspace-card-head">
+                                    <h3>Permission Catalog</h3>
+                                    <p>Grouped checklists mirror the backend RBAC contract.</p>
+                                </div>
+                                <div id="roleTemplatePreview" class="admin-access-empty">
+                                    Open a role to edit its permission bundle.
+                                </div>
+                            </article>
+                        </div>
+                    </section>
+                </div>
+
+                <div class="subpage-view" data-group="admin-access" data-subpage="program-assignments">
+                    <section class="workspace-card admin-access-card program-assignments-shell">
+                        <div class="workspace-card-head">
+                            <div>
+                                <h3>Program Assignments</h3>
+                                <p>Manage station-scoped show access and broadcast capabilities.</p>
+                            </div>
+                            <div class="program-assignments-toolbar">
+                                <button class="btn-secondary" type="button" onclick="loadProgramAssignmentsPanel(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                    <span>Refresh</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="program-assignments-grid">
+                            <article class="workspace-card program-assignments-list-card">
+                                <div class="workspace-card-head">
+                                    <div class="program-assignments-filters">
+                                        <label class="form-group">
+                                            <span>Station</span>
+                                            <select id="programAssignmentStationSelect"></select>
+                                        </label>
+                                        <label class="form-group">
+                                            <span>Show</span>
+                                            <select id="programAssignmentShowSelect"></select>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div id="programAssignmentList" class="program-assignment-list" aria-live="polite">
+                                    <div class="admin-access-empty">Loading assignments...</div>
+                                </div>
+                            </article>
+
+                            <article class="workspace-card program-assignments-editor-card">
+                                <div class="workspace-card-head">
+                                    <h3>Assignment Editor</h3>
+                                    <p>Select a user, choose capability grants, then save or remove the assignment.</p>
+                                </div>
+                                <div class="program-assignments-editor">
+                                    <label class="form-group">
+                                        <span>User</span>
+                                        <select id="programAssignmentUserSelect"></select>
+                                    </label>
+                                    <label class="form-group">
+                                        <span>Role</span>
+                                        <select id="programAssignmentRoleSelect">
+                                            <option value="dj">DJ</option>
+                                            <option value="producer">Producer</option>
+                                        </select>
+                                    </label>
+                                    <div class="form-group">
+                                        <span>Show capabilities</span>
+                                        <div id="programAssignmentCapabilityList" class="program-assignment-capabilities"></div>
+                                    </div>
+                                    <div class="program-assignments-actions">
+                                        <button id="programAssignmentSaveBtn" class="btn-primary" type="button" onclick="saveProgramAssignment()">Save Assignment</button>
+                                        <button id="programAssignmentRemoveBtn" class="btn-secondary" type="button" onclick="removeProgramAssignment()">Remove Assignment</button>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                    </section>
+                </div>
+
+                <div class="subpage-view" data-group="admin-access" data-subpage="stations">
+                    <section class="workspace-card admin-access-card stations-management-shell">
+                        <div class="workspace-card-head">
+                            <div>
+                                <h3>Stations</h3>
+                                <p>Manage broadcast stations and keep the minimum-one-station invariant intact.</p>
+                            </div>
+                            <div class="stations-management-toolbar">
+                                <button class="btn-secondary" type="button" onclick="loadStationsAdminPanel(true)">
+                                    <span class="material-icons-round">refresh</span>
+                                    <span>Refresh</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="stations-admin-create-row">
+                            <label class="form-group">
+                                <span>New Station</span>
+                                <input type="text" id="adminStationName" placeholder="e.g. Talk FM">
+                            </label>
+                            <button id="adminStationCreateBtn" class="btn-primary" type="button" onclick="createAdminStation()">
+                                <span class="material-icons-round">add</span>
+                                <span>Add Station</span>
+                            </button>
+                        </div>
+                        <div id="stationsAdminList" class="stations-admin-list" aria-live="polite">
+                            <div class="admin-access-empty">Station management is loading...</div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="modal-overlay" id="userModal" style="display:none">
+                <div class="modal user-modal">
+                    <div class="modal-header">
+                        <h3 id="userModalTitle">Create User</h3>
+                        <button class="btn-close" type="button" onclick="closeUserModal()">
+                            <span class="material-icons-round">close</span>
+                        </button>
+                    </div>
+                    <form id="userForm">
+                        <input type="hidden" id="userId">
+                        <div class="modal-body user-modal-body">
+                            <div class="user-modal-grid">
+                                <div class="form-group">
+                                    <label for="userUsername">Username</label>
+                                    <input type="text" id="userUsername" placeholder="alice">
+                                </div>
+                                <div class="form-group">
+                                    <label for="userDisplayName">Display Name</label>
+                                    <input type="text" id="userDisplayName" placeholder="Alice Example">
+                                </div>
+                                <div class="form-group">
+                                    <label for="userRole">Legacy Role</label>
+                                    <select id="userRole">
+                                        <option value="admin">Admin</option>
+                                        <option value="dj">DJ</option>
+                                        <option value="producer">Producer</option>
+                                        <option value="viewer">Viewer</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="userRoleTemplateSelect">Role Templates</label>
+                                    <select id="userRoleTemplateSelect" multiple size="6"></select>
+                                    <p class="help-text">Hold Ctrl or Cmd to assign more than one template.</p>
+                                </div>
+                                <div class="form-group user-modal-wide">
+                                    <label for="userPassword">Password</label>
+                                    <input type="password" id="userPassword" placeholder="Create password">
+                                    <p class="help-text">Shown when creating a user.</p>
+                                </div>
+                                <div class="form-group user-modal-wide">
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="userActive" checked>
+                                        <span>User is active</span>
+                                    </label>
+                                </div>
+                                <div class="form-group user-modal-wide">
+                                    <label for="userResetPassword">Reset Password</label>
+                                    <input type="password" id="userResetPassword" placeholder="New password">
+                                    <p class="help-text">Enter a new password for the selected user.</p>
+                                </div>
+                                <div class="form-group user-modal-wide">
+                                    <label>Effective Permissions Preview</label>
+                                    <div id="userDraftPermissionsPreview" class="user-permissions-preview user-modal-preview">
+                                        <div class="user-preview-empty">Select role templates to preview permissions.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-actions user-modal-actions">
+                                <button class="btn-secondary" type="button" onclick="closeUserModal()">Cancel</button>
+                                <button class="btn-secondary" id="userResetPasswordBtn" type="button" onclick="promptResetUserPassword(Number(document.getElementById('userId').value || 0))">Reset Password</button>
+                                <button class="btn-primary" id="userSaveBtn" type="submit">Create User</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="modal-overlay" id="roleTemplateModal" style="display:none">
+                <div class="modal role-template-modal">
+                    <div class="modal-header">
+                        <h3 id="roleTemplateModalTitle">Create Role</h3>
+                        <button class="btn-close" type="button" onclick="closeRoleTemplateModal()">
+                            <span class="material-icons-round">close</span>
+                        </button>
+                    </div>
+                    <form id="roleTemplateForm">
+                        <input type="hidden" id="roleTemplateId">
+                        <div class="modal-body role-template-modal-body">
+                            <div class="form-group">
+                                <label for="roleTemplateName">Role Name</label>
+                                <input type="text" id="roleTemplateName" placeholder="Newsroom Operators">
+                            </div>
+                            <div class="form-group">
+                                <label for="roleTemplateDescription">Description</label>
+                                <input type="text" id="roleTemplateDescription" placeholder="Reusable permission bundle">
+                            </div>
+                            <section class="role-permission-shell">
+                                <div class="workspace-card-head">
+                                    <h3>Permission Groups</h3>
+                                    <p>Select the permissions that belong to this role template.</p>
+                                </div>
+                                <div id="rolePermissionGroups" class="role-permission-groups"></div>
+                            </section>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-secondary" type="button" onclick="closeRoleTemplateModal()">Cancel</button>
+                            <button class="btn-secondary" id="roleTemplateDeleteBtn" type="button" onclick="deleteRoleTemplate(Number(document.getElementById('roleTemplateId').value || 0))">Deactivate</button>
+                            <button class="btn-primary" id="roleTemplateSaveBtn" type="submit">Create Role</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- ==================== AI HOST PANEL ==================== -->
+            <div class="panel" id="panel-ai-host">
+                <div class="panel-header">
+                    <h2>AI Radio Host</h2>
+                    <div class="header-actions">
+                        <button class="btn-action" id="aiWarmupBtn" type="button" onclick="warmupAIModels()">
+                            <span class="material-icons-round">memory</span>
+                            Warm Up AI
+                        </button>
+                        <button class="btn-action" id="aiClearCacheBtn" type="button" onclick="clearAICache()">
+                            <span class="material-icons-round">delete_sweep</span>
+                            Clear Cache
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="settings-content">
+                    <!-- AI Status Card -->
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>AI Host Status</h3>
+                            <p>Runtime status of speech generation, cache state, and queue-native AI announcements</p>
+                        </div>
+                        <div class="ai-status-grid" id="aiStatusGrid">
+                            <div class="ai-status-item">
+                                <span class="material-icons-round">psychology</span>
+                                <div>
+                                    <div class="ai-status-label">LLM Model</div>
+                                    <div class="ai-status-value" id="aiLlmStatus">Not Loaded</div>
+                                </div>
+                            </div>
+                            <div class="ai-status-item">
+                                <span class="material-icons-round">record_voice_over</span>
+                                <div>
+                                    <div class="ai-status-label">TTS Model</div>
+                                    <div class="ai-status-value" id="aiTtsStatus">Not Loaded</div>
+                                </div>
+                            </div>
+                            <div class="ai-status-item">
+                                <span class="material-icons-round">schedule</span>
+                                <div>
+                                    <div class="ai-status-label">Current Persona</div>
+                                    <div class="ai-status-value" id="aiPersonaStatus">-</div>
+                                </div>
+                            </div>
+                            <div class="ai-status-item">
+                                <span class="material-icons-round">cached</span>
+                                <div>
+                                    <div class="ai-status-label">Announcements Cached</div>
+                                    <div class="ai-status-value" id="aiCacheStatus">0</div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- AI Settings Form -->
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>AI Host Settings</h3>
+                            <p>Configure AI prompts, station IDs, and voice behavior for real queue-integrated announcements</p>
+                        </div>
+                        
+                        <div class="settings-form-grid">
+                            <!-- Enable/Disable Toggle -->
+                            <div class="form-group form-group-full-width">
+                                <label class="ai-toggle-label">
+                                    <input type="checkbox" id="aiHostToggle" class="ai-toggle-checkbox">
+                                    <span class="ai-toggle-text">Enable AI Radio Host</span>
+                                </label>
+                                <p class="form-hint">When enabled, AI will generate spoken introductions before music tracks</p>
+                            </div>
+
+                            <!-- LLM Model -->
+                            <div class="form-group">
+                                <label for="aiLlmModel">LLM Model</label>
+                                <input type="text" id="aiLlmModel" placeholder="Qwen/Qwen2.5-0.5B-Instruct">
+                                <p class="form-hint">HuggingFace model ID for commentary generation</p>
+                            </div>
+
+                            <!-- TTS Model Path -->
+                            <div class="form-group">
+                                <label for="aiTtsModelPath">TTS Model Path</label>
+                                <input type="text" id="aiTtsModelPath" placeholder="Leave empty for default">
+                                <p class="form-hint">Local path to Qwen3-TTS model directory</p>
+                            </div>
+
+                            <!-- Voice Persona -->
+                            <div class="form-group">
+                                <label for="aiVoicePersona">Voice Persona</label>
+                                <select id="aiVoicePersona">
+                                    <option value="auto">Auto (Time-based)</option>
+                                    <option value="morning">Morning (5AM-12PM)</option>
+                                    <option value="afternoon">Afternoon (12PM-5PM)</option>
+                                    <option value="evening">Evening (5PM-9PM)</option>
+                                    <option value="night">Night (9PM-5AM)</option>
+                                </select>
+                                <p class="form-hint">Voice style for AI announcements</p>
+                            </div>
+
+                            <!-- Announcement Length -->
+                            <div class="form-group">
+                                <label for="aiAnnouncementLength">Max Announcement Length (seconds)</label>
+                                <input type="number" id="aiAnnouncementLength" min="5" max="60" value="15">
+                                <p class="form-hint">Maximum duration for AI introductions</p>
+                            </div>
+
+                            <div class="form-group form-group-full-width">
+                                <label for="aiPromptTemplate">Prompt Template</label>
+                                <textarea id="aiPromptTemplate" rows="4"
+                                    placeholder="You're listening to {station_name}. Up next is {track_title}{artist_phrase}.{history_line}{educational_line}"></textarea>
+                                <p class="form-hint">Available tokens: <code>{station_name}</code>, <code>{track_title}</code>, <code>{artist}</code>, <code>{artist_phrase}</code>, <code>{history_line}</code>, <code>{educational_line}</code></p>
+                            </div>
+
+                            <!-- Music History Integration -->
+                            <div class="form-group form-group-full-width">
+                                <label class="ai-checkbox-label">
+                                    <input type="checkbox" id="aiMusicHistory" checked>
+                                    <span>Include Music History Context</span>
+                                </label>
+                                <p class="form-hint">AI can reference "This Day in Music History" events</p>
+                            </div>
+
+                            <!-- Educational Segments -->
+                            <div class="form-group form-group-full-width">
+                                <label class="ai-checkbox-label">
+                                    <input type="checkbox" id="aiEducationalSegments">
+                                    <span>Enable Educational Segments</span>
+                                </label>
+                                <p class="form-hint">Hourly "What to Listen For" mini-lessons (adds ~60-90s between tracks)</p>
+                            </div>
+
+                            <!-- Station ID Interval -->
+                            <div class="form-group">
+                                <label for="aiStationIdInterval">Station ID Interval (seconds)</label>
+                                <input type="number" id="aiStationIdInterval" min="300" max="7200" value="1800">
+                                <p class="form-hint">How often to play station identification (default: 1800s = 30 min)</p>
+                            </div>
+                        </div>
+
+                        <!-- Save Button -->
+                        <div class="form-actions">
+                            <button class="btn-primary" id="aiSaveSettingsBtn" type="button" onclick="saveAISettings()">
+                                <span class="material-icons-round">save</span>
+                                Save AI Settings
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- Recent Announcements -->
+                    <section class="workspace-card">
+                        <div class="workspace-card-head">
+                            <h3>Recent Announcements</h3>
+                            <p>Cached AI-generated announcement assets that can be inserted into the broadcast queue</p>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="track-table">
+                                <thead>
+                                    <tr>
+                                        <th>Track</th>
+                                        <th>Size</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="aiAnnouncementsTable">
+                                    <tr><td colspan="3">Loading announcements...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- ==================== LOG PANEL ==================== -->
+            <div class="panel" id="panel-logs">
+                <div class="panel-header">
+                    <h2>System & Playback Logs</h2>
+                    <div class="header-actions">
+                        <button id="logExportButton" class="btn-action" type="button" title="Export current log range as CSV" onclick="exportLogs()">
+                            <span class="material-icons-round">download</span>
+                            Download CSV
+                        </button>
+                    </div>
+                </div>
+                <div class="log-filters">
+                    <input type="date" id="logDateFrom">
+                    <input type="date" id="logDateTo">
+                    <button class="btn-action" onclick="loadLogs()">Filter</button>
+                </div>
+                <div class="log-error-banner" id="logErrorBanner" style="display:none"></div>
+                <div class="table-wrapper">
+                    <table class="track-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Source</th>
+                                <th>Event</th>
+                                <th>Details</th>
+                                <th>Level</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ==================== SETTINGS PANEL ==================== -->
+            <div class="panel panel-clean" id="panel-settings">
+                <div class="panel-header">
+                    <h2>Settings</h2>
+                </div>
+                <section class="workspace-card workspace-guide-card">
+                    <div class="workspace-card-head">
+                        <h3>Settings Layout</h3>
+                        <p>Shared, station and runtime sections are grouped for faster navigation.</p>
+                    </div>
+                </section>
+                <div class="settings-content">
+                    <details class="workspace-disclosure" open>
+                        <summary>
+                            <span class="material-icons-round">tune</span>
+                            <span>Shared Settings</span>
+                        </summary>
+                        <div class="workspace-disclosure-body">
+                            <div class="settings-group">
+                                <h3>Shared Settings (All Stations)</h3>
+                                <div class="settings-form-grid">
+                                    <div class="form-group">
+                                        <label>Display Brand Name</label>
+                                        <input type="text" id="sysDisplayBrandName" maxlength="72"
+                                            placeholder="RadioTEDU OnAir">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>UI Language</label>
+                                        <select id="sysUiLanguage">
+                                            <option value="en-US">English (US)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Default Crossfade (sec)</label>
+                                        <input type="number" id="sysCrossfadeSeconds" min="0" max="12" step="0.1"
+                                            value="3.0">
+                                    </div>
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="sysOperationLogsEnabled">
+                                        <span>Operation Logs Enabled</span>
+                                    </label>
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="sysAutoScanOnStartup">
+                                        <span>Auto Scan On Startup</span>
+                                    </label>
+                                </div>
+                                <div class="modal-actions">
+                                    <button class="btn-primary" onclick="saveSystemSettings()">Save Shared
+                                        Settings</button>
+                                </div>
+                            </div>
+                            <div class="settings-group">
+                                <h3>Ads Pricing Defaults</h3>
+                                <div class="settings-form-grid">
+                                    <div class="form-group">
+                                        <label>Currency</label>
+                                        <input type="text" id="adsPriceCurrency" value="USD" maxlength="6">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Default Price / Sec</label>
+                                        <input type="number" id="adsPricePerSecond" value="0.20" min="0" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Fallback Ad Duration (sec)</label>
+                                        <input type="number" id="adsFallbackDuration" value="30" min="1" max="600" step="1">
+                                    </div>
+                                </div>
+                                <div class="settings-row">
+                                    <span class="label">Usage</span>
+                                    <span class="value">Used for ad-based revenue calculations</span>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="workspace-disclosure" open>
+                        <summary>
+                            <span class="material-icons-round">radio</span>
+                            <span>Station Settings</span>
+                        </summary>
+                        <div class="workspace-disclosure-body">
+                            <div class="settings-group">
+                                <h3>Station Settings</h3>
+                                <div class="settings-row">
+                                    <span class="label">Current Station</span>
+                                    <span class="value" id="settingsStationName">-</span>
+                                </div>
+                                <div class="settings-form-grid">
+                                    <div class="form-group">
+                                        <label>Timezone</label>
+                                        <input type="text" id="stTimezone" placeholder="UTC">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Output Gain (dB)</label>
+                                        <input type="number" id="stOutputGainDb" min="-18" max="18" step="0.1"
+                                            value="0">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Playback Output</label>
+                                        <select id="stOutputMode" onchange="toggleStationOutputModeUi()">
+                                            <option value="speaker">Speaker (Local)</option>
+                                            <option value="icecast">Icecast + Speaker Monitor</option>
+                                        </select>
+                                    </div>
+                                    <label class="settings-checkbox settings-form-wide" id="stSpeakerMonitorRow">
+                                        <input type="checkbox" id="stSpeakerMonitorEnabled">
+                                        <span>Speaker Monitor Enabled</span>
+                                    </label>
+                                    <div class="form-group settings-form-wide" id="stSpeakerMonitorHintWrap">
+                                        <small id="stSpeakerMonitorHint" style="color:var(--text-muted)">In speaker mode
+                                            this stays enabled.</small>
+                                    </div>
+                                    <div class="form-group settings-form-wide">
+                                        <label>Station Tagline</label>
+                                        <input type="text" id="stTagline" placeholder="Optional station subtitle">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Icecast Host</label>
+                                        <input type="text" id="stIcecastHost" placeholder="127.0.0.1">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Icecast Port</label>
+                                        <input type="number" id="stIcecastPort" min="1" max="65535" step="1"
+                                            value="8000">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Mount</label>
+                                        <input type="text" id="stIcecastMount" placeholder="/live">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Username</label>
+                                        <input type="text" id="stIcecastUsername" placeholder="source">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Stream Codec</label>
+                                        <select id="stStreamCodecProfile">
+                                            <option value="aac_192" data-bitrate="192" selected>AAC 192 kbps</option>
+                                            <option value="aac_plus_196" data-bitrate="196">AAC compatibility 196 kbps</option>
+                                            <option value="opus_196" data-bitrate="196">Opus 196 kbps</option>
+                                            <option value="opus_320" data-bitrate="320">Opus 320 kbps</option>
+                                            <option value="mp3_128" data-bitrate="128">MP3 128 kbps</option>
+                                            <option value="ogg_flac_lossless" data-bitrate="0">Ogg FLAC lossless</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Password</label>
+                                        <input type="password" id="stIcecastPassword" placeholder="Source password">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Stream Name</label>
+                                        <input type="text" id="stIcecastStreamName" placeholder="Station stream title">
+                                    </div>
+                                    <div class="form-group settings-form-wide icecast-field">
+                                        <label>Stream Description</label>
+                                        <input type="text" id="stIcecastStreamDescription"
+                                            placeholder="Station stream description">
+                                    </div>
+                                    <div class="form-group icecast-field">
+                                        <label>Genre</label>
+                                        <input type="text" id="stIcecastStreamGenre" placeholder="Various">
+                                    </div>
+                                    <label class="settings-checkbox icecast-field">
+                                        <input type="checkbox" id="stIcecastPublic">
+                                        <span>Public Stream Listing</span>
+                                    </label>
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="stAutoTrimImports">
+                                        <span>Auto Trim Imported Tracks</span>
+                                    </label>
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="stAutoIntroCleanImports">
+                                        <span>Auto Intro Clean for Imports</span>
+                                    </label>
+                                    <label class="settings-checkbox">
+                                        <input type="checkbox" id="stLoudnessNormalization" checked>
+                                        <span>Loudness Normalization (LUFS -14 dB)</span>
+                                    </label>
+                                </div>
+                                <div class="modal-actions">
+                                    <button class="btn-primary" onclick="saveStationSettings()">Save Station
+                                        Settings</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="workspace-disclosure" open>
+                        <summary>
+                            <span class="material-icons-round">play_circle</span>
+                            <span>Startup Sound</span>
+                        </summary>
+                        <div class="workspace-disclosure-body">
+                            <div class="settings-group">
+                                <h3>Başlangıç Sesi</h3>
+                                <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Radyo her başlatıldığında ilk olarak çalınacak ses. Rastgele bir jingle veya belirli bir ses dosyası seçebilirsiniz.</p>
+                                <div class="settings-form-grid">
+                                    <label class="settings-checkbox settings-form-wide">
+                                        <input type="checkbox" id="startupSoundEnabled">
+                                        <span>Başlangıç Sesi Aktif</span>
+                                    </label>
+                                    <div class="form-group">
+                                        <label>Mod</label>
+                                        <select id="startupSoundMode" onchange="onStartupSoundModeChange()">
+                                            <option value="random">Rastgele Jingle</option>
+                                            <option value="specific">Belirli Ses</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" id="startupSoundTrackRow" style="display:none;">
+                                        <label>Ses Dosyası</label>
+                                        <div style="display:flex;gap:6px;align-items:center;">
+                                            <select id="startupSoundTrackId" style="flex:1;">
+                                                <option value="0">— Seçin —</option>
+                                            </select>
+                                            <label class="btn-action" style="cursor:pointer;white-space:nowrap;margin:0;padding:6px 10px;font-size:12px;" title="Ses dosyası yükle">
+                                                <span class="material-icons-round" style="font-size:16px;">upload_file</span>
+                                                <input type="file" id="startupSoundUpload" accept="audio/*" style="display:none;" onchange="uploadStartupSound(this)">
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="modal-actions">
+                                    <button class="btn-primary" onclick="saveStartupSoundConfig()">Save Startup Sound</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="workspace-disclosure">
+                        <summary>
+                            <span class="material-icons-round">monitor_heart</span>
+                            <span>Runtime Information</span>
+                        </summary>
+                        <div class="workspace-disclosure-body">
+                            <div class="settings-group">
+                                <h3>Runtime Information</h3>
+                                <div class="settings-info" id="settingsInfo">
+                                    <!-- Filled by JS -->
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- AD CAMPAIGN EDIT MODAL -->
+    <div class="modal-overlay ads-edit-modal" id="adCampaignEditModal" style="display:none">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>Edit Campaign</h3>
+                <button class="btn-close" onclick="closeAdCampaignEditModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-row">
+                    <span class="label">Editing</span>
+                    <span class="value" id="adCampaignEditLabel">Campaign #-</span>
+                </div>
+                <div class="ads-form-grid">
+                    <div class="form-group">
+                        <label>Campaign Name</label>
+                        <input type="text" id="adCampaignEditName" placeholder="Morning Sponsor">
+                    </div>
+                    <div class="form-group">
+                        <label>Start Date</label>
+                        <input type="date" id="adCampaignEditStart">
+                    </div>
+                    <div class="form-group">
+                        <label>End Date</label>
+                        <input type="date" id="adCampaignEditEnd">
+                    </div>
+                    <div class="form-group">
+                        <label>Break Sets</label>
+                        <select id="adCampaignEditBreakSets" multiple size="7"></select>
+                        <div class="ads-quick-actions">
+                            <button class="btn-sm" type="button" onclick="selectAllCampaignEditBreakSets()">Select All
+                                Sets</button>
+                            <button class="btn-sm" type="button" onclick="clearCampaignEditBreakSets()">Clear</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ad Track</label>
+                        <select id="adCampaignEditTracks"></select>
+                    </div>
+                    <div class="ads-advanced settings-form-wide">
+                        <details>
+                            <summary>Advanced Campaign Options</summary>
+                            <div class="ads-advanced-grid">
+                                <div class="form-group">
+                                    <label>Day Interval</label>
+                                    <input type="number" id="adCampaignEditDayInterval" min="1" max="60" step="1"
+                                        value="1">
+                                </div>
+                                <div class="form-group">
+                                    <label>Daily Repeat Limit</label>
+                                    <input type="number" id="adCampaignEditDailyLimit" min="0" max="200" step="1"
+                                        value="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Priority</label>
+                                    <input type="number" id="adCampaignEditPriority" min="-100" max="100" step="1"
+                                        value="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Notes</label>
+                                    <input type="text" id="adCampaignEditNotes" placeholder="Optional notes for campaign">
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                    <label class="settings-checkbox">
+                        <input type="checkbox" id="adCampaignEditActive" checked>
+                        <span>Campaign Active</span>
+                    </label>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="closeAdCampaignEditModal()">Cancel</button>
+                    <button class="btn-primary" onclick="saveAdCampaignEditModal()">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ENGINE RESTART CONFIRMATION MODAL -->
+    <div class="modal-overlay" id="restartConfirmModal" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3>
+                    <span class="material-icons-round"
+                        style="color:var(--orange);vertical-align:middle;margin-right:6px">warning</span>
+                    Engine Restart Required
+                </h3>
+                <button class="btn-close" onclick="closeRestartConfirmModal(false)">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
+                    Saving these settings will <strong>restart the audio engine</strong>. This may cause a <em>brief
+                        interruption</em> in the broadcast.
+                </p>
+                <div id="restartConfirmChanges"
+                    style="margin-bottom:16px;padding:10px 14px;border-radius:8px;background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.18);font-size:13px;color:var(--text-secondary)">
+                    <!-- Changed fields listed here by JS -->
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="closeRestartConfirmModal(false)">Cancel</button>
+                    <button class="btn-primary" onclick="closeRestartConfirmModal(true)"
+                        style="background:var(--orange)">
+                        <span class="material-icons-round"
+                            style="font-size:18px;vertical-align:middle;margin-right:4px">restart_alt</span>
+                        Confirm & Restart
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE PLAYLIST MODAL -->
+    <div class="modal-overlay" id="stationCreateModal" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3>Create Station</h3>
+                <button class="btn-close" onclick="closeStationCreateModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Station Name</label>
+                    <input type="text" id="stationCreateName" placeholder="e.g. Hits FM">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="stationCreateDescription" placeholder="Optional description">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="closeStationCreateModal()">Cancel</button>
+                    <button class="btn-primary" onclick="createStationFromModal()">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE PLAYLIST MODAL -->
+    <div class="modal-overlay" id="createPlaylistModal" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3>Create New Playlist</h3>
+                <button class="btn-close" onclick="document.getElementById('createPlaylistModal').style.display='none'">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Playlist Name</label>
+                    <input type="text" id="newPlaylistName" placeholder="Morning Show...">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="newPlaylistDesc" placeholder="Optional description...">
+                </div>
+                <button class="btn-primary" onclick="createPlaylist()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AUTO PLAYLIST MODAL -->
+    <div class="modal-overlay" id="autoPlaylistModal" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3>Create Auto Playlist</h3>
+                <button class="btn-close" onclick="closeAutoPlaylistModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Playlist Name</label>
+                    <input type="text" id="autoPlaylistName" placeholder="e.g., Pop Mix 95-120 BPM">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="autoPlaylistDesc" placeholder="Optional">
+                </div>
+                <div class="form-group">
+                    <label>Artist</label>
+                    <input type="text" id="autoPlaylistArtist" list="autoPlaylistArtistList"
+                        placeholder="Search artist...">
+                    <datalist id="autoPlaylistArtistList"></datalist>
+                </div>
+                <div class="form-group">
+                    <label>Genre</label>
+                    <select id="autoPlaylistGenre">
+                        <option value="">All Genres</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="autoPlaylistType">
+                        <option value="any">All</option>
+                        <option value="music">Music</option>
+                        <option value="jingle">Jingle</option>
+                        <option value="ad">Ad</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Min BPM</label>
+                    <input type="number" id="autoPlaylistBpmMin" placeholder="Optional" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label>Max BPM</label>
+                    <input type="number" id="autoPlaylistBpmMax" placeholder="Optional" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label>Track Limit</label>
+                    <input type="number" id="autoPlaylistLimit" value="50" min="1" max="500">
+                </div>
+                <div class="form-group">
+                    <label>Sort Order</label>
+                    <select id="autoPlaylistSort">
+                        <option value="random">Random</option>
+                        <option value="title">Title (A-Z)</option>
+                        <option value="artist">Artist (A-Z)</option>
+                        <option value="bpm_asc">BPM (Ascending)</option>
+                        <option value="bpm_desc">BPM (Descending)</option>
+                        <option value="duration_desc">Duration (Longest-Shortest)</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="closeAutoPlaylistModal()">Cancel</button>
+                    <button class="btn-primary" onclick="createAutoPlaylist()">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE SCHEDULE MODAL -->
+    <div class="modal-overlay" id="createScheduleModal" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3 id="scheduleModalTitle">New Schedule</h3>
+                <button class="btn-close" onclick="closeScheduleModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Event Name</label>
+                    <input type="text" id="scheduleEventName" placeholder="Optional (e.g. Drive Time)">
+                </div>
+                <div class="form-group">
+                    <label>Playlist</label>
+                    <select id="schedulePlaylist"></select>
+                </div>
+                <div class="form-group">
+                    <label>Start Time</label>
+                    <input type="time" id="scheduleStart">
+                </div>
+                <div class="form-group">
+                    <label>End Time</label>
+                    <input type="time" id="scheduleEnd">
+                </div>
+                <div class="form-group">
+                    <label>Days</label>
+                    <select id="scheduleDays">
+                        <option value="*">Every Day</option>
+                        <option value="0,1,2,3,4">Weekdays</option>
+                        <option value="5,6">Weekend</option>
+                        <option value="0">Monday</option>
+                        <option value="1">Tuesday</option>
+                        <option value="2">Wednesday</option>
+                        <option value="3">Thursday</option>
+                        <option value="4">Friday</option>
+                        <option value="5">Saturday</option>
+                        <option value="6">Sunday</option>
+                    </select>
+                </div>
+                <button class="btn-primary" id="scheduleSaveBtn" onclick="createSchedule()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AUDIO TOOLS MODAL -->
+    <div class="modal-overlay" id="audioToolsModal" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Audio Tools</h3>
+                <button class="btn-close" onclick="closeAudioToolsModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-row">
+                    <span class="label">Track</span>
+                    <span class="value" id="audioToolsTrackLabel">-</span>
+                </div>
+
+                <div class="wave-editor">
+                    <div class="wave-toolbar">
+                        <div class="wave-transport">
+                            <button class="btn-sm" onclick="toggleAudioToolsPlay()" title="Play / Pause">
+                                <span class="material-icons-round">play_arrow</span>
+                            </button>
+                            <button class="btn-sm" onclick="stopAudioToolsPlay()" title="Stop">
+                                <span class="material-icons-round">stop</span>
+                            </button>
+                            <span class="wave-time" id="audioToolsTime">00:00 / 00:00</span>
+                        </div>
+                        <div class="wave-zoom">
+                            <label for="audioToolsZoom">Zoom</label>
+                            <input type="range" id="audioToolsZoom" min="1" max="8" value="1" step="1"
+                                oninput="setAudioToolsZoom(this.value)">
+                            <span id="audioToolsZoomLabel">1x</span>
+                        </div>
+                    </div>
+
+                    <div class="wave-canvas-wrap">
+                        <canvas id="audioWaveformCanvas"></canvas>
+                        <div class="wave-overlay">
+                            <span id="audioToolsSelectionLabel">Selection: 0.00s - 0.00s</span>
+                        </div>
+                    </div>
+                    <div class="wave-status" id="audioToolsStatus">Waveform will load when you open a track.</div>
+                    <audio id="audioToolsPlayer" controls preload="metadata"></audio>
+                </div>
+
+                <div class="audio-tools-grid" style="margin-top:14px">
+                    <div class="audio-tool-card" id="manualTrimCard">
+                        <h4>Manual Trim</h4>
+                        <p>Drag on waveform, keep selected range, trim outside parts.</p>
+                        <div class="selection-note" id="manualTrimSelectionHint">Select a range on waveform to enable
+                            trim.</div>
+                        <button class="btn-primary" onclick="applyManualTrim()">Keep Selection and Trim</button>
+                    </div>
+
+                    <div class="audio-tool-card" id="autoTrimCard">
+                        <h4>Auto Silence Trim</h4>
+                        <p>Detect and remove silent parts at start/end.</p>
+                        <div class="form-group">
+                            <label>Threshold (dB)</label>
+                            <input type="number" id="autoTrimThreshold" min="-90" max="-5" step="1" value="-45">
+                        </div>
+                        <div class="form-group">
+                            <label>Min Silence (seconds)</label>
+                            <input type="number" id="autoTrimMinSilence" min="0" max="3" step="0.01" value="0.15">
+                        </div>
+                        <button class="btn-primary" onclick="applyAutoTrimTrack()">Apply Auto Trim</button>
+                    </div>
+                </div>
+
+                <div class="audio-tool-card" id="censorCard" style="margin-top:14px">
+                    <h4>Censor Segment</h4>
+                    <p>Apply effect to selected time range. Drag on waveform to select.</p>
+                    <div class="form-group">
+                        <label>Effect</label>
+                        <select id="censorEffect">
+                            <option value="mute">Mute</option>
+                            <option value="dj_spin">DJ Spin</option>
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn-secondary" onclick="addSelectionAsCensorSegment()">Add Selected
+                            Segment</button>
+                        <button class="btn-secondary" onclick="clearCensorSegments()">Clear Segments</button>
+                        <button class="btn-primary" onclick="applyCensorSegments()">Apply Censor</button>
+                    </div>
+                    <div id="censorSegmentsList" class="segment-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TEST MODE / PREVIEW PLAYER -->
+    <div id="testPlayer" class="test-player" style="display:none">
+        <div class="test-player-info">
+            <span class="material-icons-round">headphones</span>
+            <span id="testTrackInfo">Track Preview</span>
+        </div>
+        <audio id="audioPreview" controls></audio>
+        <button class="btn-close" onclick="closeTestMode()">
+            <span class="material-icons-round">close</span>
+        </button>
+    </div>
+
+    <!-- TOAST -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script defer src="/static/js/runtime-indicator.js?v=1"></script>
+    <script defer src="/static/js/mic.js?v=1"></script>
+    <script defer src="/static/js/soundboard.js?v=3"></script>
+    <script defer src="/static/js/app.js?v=22"></script>
+    <script defer src="/static/js/setup-wizard.js?v=4"></script>
+    <script defer src="/static/js/studio.js?v=1"></script>
+    <script defer src="/static/js/ai-host.js?v=4"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            let shellRefreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (shellRefreshing) return;
+                shellRefreshing = true;
+                window.location.reload();
+            });
+            navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(registration => {
+                registration.update();
+            }).catch(() => {});
+        }
+    </script>
+</body>
+
+</html>

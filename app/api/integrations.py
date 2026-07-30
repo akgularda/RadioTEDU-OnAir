@@ -1,0 +1,359 @@
+import json
+import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from app.auth.dependencies import require_any_permission, require_permission
+from app.db import get_connection, init_db
+from app.repositories.settings_repo import SettingsRepository
+from app.security.credential_vault import (
+    resolve_credential_value,
+    store_system_secret,
+)
+
+router = APIRouter()
+
+
+class RadioTEDUIntegrationSettingsUpdate(BaseModel):
+    voting_enabled: bool = False
+    voting_base_url: str = ""
+    voting_agent_device_id: str = ""
+    voting_agent_token: str = ""
+    study_enabled: bool = False
+    study_base_url: str = ""
+
+
+class VotingCandidate(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    song_id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=255)
+    artist: str = Field(min_length=1, max_length=255)
+    album_art_url: str | None = Field(default=None, max_length=2000)
+
+
+class PublishVotingRoundPayload(BaseModel):
+    round_id: str = Field(default="", max_length=120)
+    candidates: list[VotingCandidate] = Field(min_length=3, max_length=3)
+    lock_after_seconds: int = Field(default=30, ge=5, le=300)
+    resolve_after_seconds: int = Field(default=45, ge=5, le=600)
+
+
+class ResolveVotingRoundPayload(BaseModel):
+    round_id: str = Field(min_length=1, max_length=120)
+
+
+def _truthy(raw, default: bool = False) -> bool:
+    token = str(raw if raw is not None else default).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _validated_base_url(raw: str, *, setting: str) -> str:
+    value = str(raw or "").strip().rstrip("/")
+    if not value:
+        raise HTTPException(status_code=409, detail=f"{setting}_not_configured")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=400, detail=f"invalid_{setting}")
+    if parsed.scheme != "https" and parsed.hostname not in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }:
+        raise HTTPException(status_code=400, detail=f"{setting}_requires_https")
+    return value
+
+
+def _request_json(
+    method: str,
+    url: str,
+    *,
+    token: str = "",
+    device_id: str = "",
+    payload: dict | None = None,
+    timeout_seconds: float = 8.0,
+) -> dict:
+    body = (
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+        if payload is not None
+        else None
+    )
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if device_id:
+        headers["x-rt-device-id"] = device_id
+    request = Request(url, data=body, method=method, headers=headers)
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            response_body = response.read(256_000).decode(
+                "utf-8",
+                errors="replace",
+            )
+            parsed = json.loads(response_body) if response_body else {}
+            return {
+                "ok": True,
+                "status": int(response.status),
+                "data": parsed,
+            }
+    except HTTPError as exc:
+        return {
+            "ok": False,
+            "status": int(exc.code),
+            "error_code": (
+                "credentials_rejected"
+                if int(exc.code) in {401, 403}
+                else "remote_request_rejected"
+            ),
+            "message": "The RadioTEDU service rejected the request.",
+        }
+    except (URLError, TimeoutError, OSError, ValueError):
+        return {
+            "ok": False,
+            "status": 0,
+            "error_code": "remote_unavailable",
+            "message": (
+                "The optional RadioTEDU service is unavailable. "
+                "Core playout is unaffected."
+            ),
+        }
+
+
+def _settings_payload(settings: dict) -> dict:
+    return {
+        "voting_enabled": _truthy(
+            settings.get("radiotedu_voting_enabled", "false")
+        ),
+        "voting_base_url": str(
+            settings.get("radiotedu_voting_base_url") or ""
+        ),
+        "voting_agent_device_id": str(
+            settings.get("radiotedu_voting_agent_device_id") or ""
+        ),
+        "voting_agent_token_configured": bool(
+            str(settings.get("radiotedu_voting_agent_token") or "")
+        ),
+        "study_enabled": _truthy(
+            settings.get("radiotedu_study_enabled", "false")
+        ),
+        "study_base_url": str(
+            settings.get("radiotedu_study_base_url") or ""
+        ),
+    }
+
+
+def _load_settings() -> tuple[dict, str]:
+    init_db()
+    conn = get_connection()
+    try:
+        settings = SettingsRepository(conn).get_system()
+    finally:
+        conn.close()
+    token = resolve_credential_value(
+        str(settings.get("radiotedu_voting_agent_token") or "")
+    )
+    return settings, token
+
+
+@router.get("/api/integrations/radiotedu")
+def get_radiotedu_integrations(
+    _user=Depends(require_any_permission("stations.view", "stations.edit")),
+):
+    settings, _token = _load_settings()
+    return _settings_payload(settings)
+
+
+@router.put("/api/integrations/radiotedu")
+def update_radiotedu_integrations(
+    payload: RadioTEDUIntegrationSettingsUpdate,
+    _user=Depends(require_permission("stations.edit")),
+):
+    init_db()
+    conn = get_connection()
+    try:
+        repo = SettingsRepository(conn)
+        existing = repo.get_system()
+        token_value = str(
+            existing.get("radiotedu_voting_agent_token") or ""
+        )
+        if payload.voting_agent_token:
+            token_value = store_system_secret(
+                "radiotedu_voting_agent_token",
+                payload.voting_agent_token,
+            )
+        if payload.voting_enabled:
+            _validated_base_url(
+                payload.voting_base_url,
+                setting="voting_base_url",
+            )
+            if not payload.voting_agent_device_id.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="voting_agent_device_id_required",
+                )
+            if not token_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail="voting_agent_token_required",
+                )
+        if payload.study_enabled:
+            _validated_base_url(
+                payload.study_base_url,
+                setting="study_base_url",
+            )
+        repo.upsert_system(
+            {
+                "radiotedu_voting_enabled": str(
+                    bool(payload.voting_enabled)
+                ).lower(),
+                "radiotedu_voting_base_url": payload.voting_base_url.strip().rstrip(
+                    "/"
+                ),
+                "radiotedu_voting_agent_device_id": (
+                    payload.voting_agent_device_id.strip()
+                ),
+                "radiotedu_voting_agent_token": token_value,
+                "radiotedu_study_enabled": str(
+                    bool(payload.study_enabled)
+                ).lower(),
+                "radiotedu_study_base_url": payload.study_base_url.strip().rstrip(
+                    "/"
+                ),
+            }
+        )
+        return {"ok": True, **_settings_payload(repo.get_system())}
+    finally:
+        conn.close()
+
+
+@router.get("/api/integrations/radiotedu/status")
+def radiotedu_integration_status(
+    _user=Depends(require_any_permission("stations.view", "stations.edit")),
+):
+    settings, _token = _load_settings()
+    config = _settings_payload(settings)
+    voting = {
+        "enabled": config["voting_enabled"],
+        "state": "disabled",
+        "core_playout_affected": False,
+    }
+    if config["voting_enabled"]:
+        base_url = _validated_base_url(
+            config["voting_base_url"],
+            setting="voting_base_url",
+        )
+        result = _request_json(
+            "GET",
+            f"{base_url}/next-song-voting/status",
+            timeout_seconds=4.0,
+        )
+        voting.update(
+            {
+                "state": "ready" if result["ok"] else "degraded",
+                "result": result,
+            }
+        )
+    study = {
+        "enabled": config["study_enabled"],
+        "state": "configured" if config["study_enabled"] else "disabled",
+        "base_url": config["study_base_url"],
+        "mode": "external_authenticated_experience",
+        "core_playout_affected": False,
+    }
+    return {"voting": voting, "study": study}
+
+
+@router.post("/api/integrations/radiotedu/voting/rounds")
+def publish_voting_round(
+    payload: PublishVotingRoundPayload,
+    _user=Depends(require_permission("stations.edit")),
+):
+    settings, token = _load_settings()
+    config = _settings_payload(settings)
+    if not config["voting_enabled"]:
+        raise HTTPException(status_code=409, detail="voting_disabled")
+    base_url = _validated_base_url(
+        config["voting_base_url"],
+        setting="voting_base_url",
+    )
+    now = datetime.now(timezone.utc)
+    lock_at = now + timedelta(seconds=int(payload.lock_after_seconds))
+    resolve_at = now + timedelta(
+        seconds=max(
+            int(payload.resolve_after_seconds),
+            int(payload.lock_after_seconds),
+        )
+    )
+    round_id = payload.round_id.strip() or f"onair-{uuid.uuid4().hex}"
+    result = _request_json(
+        "POST",
+        f"{base_url}/next-song-voting/agent/rounds",
+        token=token,
+        device_id=config["voting_agent_device_id"],
+        payload={
+            "id": round_id,
+            "status": "open",
+            "openedAt": now.isoformat(),
+            "lockAt": lock_at.isoformat(),
+            "resolveAt": resolve_at.isoformat(),
+            "candidates": [
+                {
+                    "id": candidate.id,
+                    "songId": candidate.song_id,
+                    "title": candidate.title,
+                    "artist": candidate.artist,
+                    "albumArtUrl": candidate.album_art_url,
+                }
+                for candidate in payload.candidates
+            ],
+        },
+    )
+    return {
+        "round_id": round_id,
+        "state": "published" if result["ok"] else "degraded",
+        "core_playout_affected": False,
+        "result": result,
+    }
+
+
+@router.post("/api/integrations/radiotedu/voting/resolve")
+def resolve_voting_round(
+    payload: ResolveVotingRoundPayload,
+    _user=Depends(require_permission("stations.edit")),
+):
+    settings, token = _load_settings()
+    config = _settings_payload(settings)
+    if not config["voting_enabled"]:
+        raise HTTPException(status_code=409, detail="voting_disabled")
+    base_url = _validated_base_url(
+        config["voting_base_url"],
+        setting="voting_base_url",
+    )
+    result = _request_json(
+        "POST",
+        (
+            f"{base_url}/next-song-voting/agent/rounds/"
+            f"{payload.round_id}/resolve"
+        ),
+        token=token,
+        device_id=config["voting_agent_device_id"],
+        payload={},
+    )
+    return {
+        "round_id": payload.round_id,
+        "state": "resolved" if result["ok"] else "degraded",
+        "core_playout_affected": False,
+        "result": result,
+    }

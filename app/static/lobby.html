@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>RadioTEDU OnAir</title>
+    <link rel="stylesheet" href="/static/css/main.css?v=20">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#120d10">
+    <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600;700;800&family=Archivo:wght@500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+
+<body class="lobby-page">
+    <main class="lobby-shell" id="publicStationLobby">
+        <section class="lobby-hero">
+            <div class="lobby-brand">
+                <span class="material-icons-round">radio</span>
+                <div>
+                    <p class="lobby-kicker" id="lobbyBrandName">RadioTEDU OnAir</p>
+                    <h1>Station Lobby</h1>
+                </div>
+            </div>
+            <p class="lobby-copy">
+                Live stations, degraded feeds, and quiet rooms are surfaced here as a public snapshot of the
+                network. Pick a station to continue into the admin panel.
+            </p>
+        </section>
+
+        <section class="lobby-status-row" aria-label="Broadcast summary">
+            <div class="lobby-status-chip" id="lobbyLiveCount">0 live</div>
+            <div class="lobby-status-chip" id="lobbyDegradedCount">0 degraded</div>
+            <div class="lobby-status-chip" id="lobbyOfflineCount">0 offline</div>
+        </section>
+
+        <section class="lobby-grid" id="publicStationGrid" aria-label="Stations overview" aria-busy="true">
+            <article class="lobby-card lobby-card--loading" data-status="loading">
+                <div class="lobby-card-top">
+                    <div>
+                        <h2>Loading stations</h2>
+                        <p>Waiting for catalog data</p>
+                    </div>
+                    <span class="lobby-status-badge lobby-status-badge--loading">Loading</span>
+                </div>
+                <p class="lobby-card-nowplaying">Public station details will render here.</p>
+            </article>
+        </section>
+    </main>
+
+    <script src="/static/js/lobby.js?v=3"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            let shellRefreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (shellRefreshing) return;
+                shellRefreshing = true;
+                window.location.reload();
+            });
+            navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(registration => {
+                registration.update();
+            }).catch(() => {});
+        }
+    </script>
+</body>
+
+</html>

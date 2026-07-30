@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>RadioTEDU OnAir Login</title>
+    <link rel="stylesheet" href="/static/css/main.css?v=20">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#120d10">
+    <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600;700;800&family=Archivo:wght@500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+
+<body class="auth-page">
+    <main class="auth-shell">
+        <section class="auth-card">
+            <div class="auth-brand">
+                <span class="material-icons-round">radio</span>
+                <div>
+                    <p class="auth-kicker" id="authBrandName">RadioTEDU OnAir</p>
+                    <h1>Sign In</h1>
+                </div>
+            </div>
+        <p class="auth-copy">Use your station credentials to access the control surface.</p>
+        <p class="auth-copy">
+            Fresh install? Read the one-time password from
+            <code>%ProgramData%\RadioTEDU\OnAir\initial-admin-password.txt</code>,
+            then change it after signing in.
+        </p>
+
+            <form id="loginForm" class="auth-form">
+                <label class="auth-field">
+                    <span>Username</span>
+                    <input id="loginUsername" type="text" name="username" autocomplete="username" required>
+                </label>
+                <label class="auth-field">
+                    <span>Password</span>
+                    <input id="loginPassword" type="password" name="password" autocomplete="current-password" required>
+                </label>
+                <p id="loginError" class="auth-error" hidden></p>
+                <button id="loginSubmit" class="btn-primary auth-submit" type="submit">Sign In</button>
+            </form>
+        </section>
+    </main>
+
+    <script defer src="/static/js/app.js?v=22"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            let shellRefreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (shellRefreshing) return;
+                shellRefreshing = true;
+                window.location.reload();
+            });
+            navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(registration => {
+                registration.update();
+            }).catch(() => {});
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="Deterministic RTAI automation wall for any radio station">
+  <title>RadioTEDU OnAir</title>
+  <link rel="stylesheet" href="/static/deterministic-wall/styles.css?v=6">
+</head>
+<body>
+  <div id="authGate" class="auth-gate" hidden>
+    <form id="loginForm" class="login-card">
+      <div class="login-program-lockup">
+        <img class="onair-program-logo" src="/static/deterministic-wall/assets/radiotedu-onair-logo.png" alt="RadioTEDU OnAir">
+        <div class="founder-lockup" aria-label="Built for RadioTEDU with RTAI">
+          <span class="founder-tile radiotedu-tile"><img src="/static/deterministic-wall/assets/radiotedu-logo.png" alt="RadioTEDU"></span>
+          <span class="founder-tile rtai-tile"><img src="/static/deterministic-wall/assets/rtai-logo.png" alt="RTAI"></span>
+        </div>
+      </div>
+      <div class="eyebrow">RADIOTEDU · RTAI BROADCAST AUTOMATION</div>
+      <h1>Broadcast Wall sign in</h1>
+      <p>Sign in to operate your deterministic radio stations.</p>
+      <label>Username<input id="loginUsername" autocomplete="username" required></label>
+      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <button id="loginButton" class="button primary" type="submit">Sign in</button>
+      <div id="loginError" class="form-error" role="alert"></div>
+    </form>
+  </div>
+
+  <div id="appShell" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-lockup" aria-label="RadioTEDU OnAir">
+          <img class="onair-brand-logo" src="/static/deterministic-wall/assets/radiotedu-onair-logo.png" alt="RadioTEDU OnAir">
+        </div>
+        <div>
+          <div class="eyebrow">RADIOTEDU · RTAI AUTOMATION</div>
+          <h1>RadioTEDU OnAir</h1>
+          <div class="compact-founder-lockup" aria-label="RadioTEDU and RTAI">
+            <span class="founder-tile radiotedu-tile"><img src="/static/deterministic-wall/assets/radiotedu-logo.png" alt="RadioTEDU"></span>
+            <span class="founder-tile rtai-tile"><img src="/static/deterministic-wall/assets/rtai-logo.png" alt="RTAI"></span>
+          </div>
+        </div>
+      </div>
+      <div class="station-control">
+        <label for="stationSelect">Controlling station</label>
+        <select id="stationSelect" aria-label="Controlling station"></select>
+      </div>
+      <div class="top-actions">
+        <span id="connectionState" class="connection-pill"><span></span>Connecting</span>
+        <button id="refreshButton" class="button secondary compact" type="button">Refresh</button>
+        <button id="logoutButton" class="button ghost compact" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero-grid rtai-hero">
+        <article class="status-card onair-card">
+          <div class="card-heading">
+            <div>
+              <div class="eyebrow">BROADCAST</div>
+              <h2 id="broadcastTitle">Checking output…</h2>
+            </div>
+            <div id="onAirLamp" class="status-lamp"><span></span><b>CHECKING</b></div>
+          </div>
+          <div class="now-playing">
+            <span>NOW PLAYING</span>
+            <strong id="nowPlayingTitle">—</strong>
+            <small id="nowPlayingArtist">Waiting for station state</small>
+          </div>
+          <div class="state-strip">
+              <div><span>Engine</span><b id="engineState">—</b></div>
+              <div><span>Scheduler</span><b id="loopState">—</b></div>
+              <div><span>Icecast</span><b id="icecastState">—</b></div>
+              <div><span>Recovery</span><b id="recoveryState">Idle</b></div>
+          </div>
+          <div class="button-row broadcast-buttons">
+            <button id="startBroadcastButton" class="button success" type="button" disabled>Start / resume broadcast</button>
+            <button id="stopBroadcastButton" class="button danger" type="button" disabled>Stop stream — keep playlist</button>
+          </div>
+          <label class="check-row"><input id="broadcastAutostartEnabled" type="checkbox"> After I press Start, resume this station automatically when the app restarts</label>
+          <small>Stopping never clears or advances the playlist. The interrupted item stays in place and restarts from its beginning when you resume.</small>
+          <p id="broadcastResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="status-card ai-card">
+          <div class="card-heading">
+            <div>
+              <div class="eyebrow">AI HOST</div>
+              <h2 id="aiTitle">Checking AI…</h2>
+            </div>
+            <div id="aiLamp" class="status-lamp"><span></span><b>CHECKING</b></div>
+          </div>
+          <p id="aiDescription" class="card-copy">Reading the saved station setting and live readiness.</p>
+          <div class="state-strip two">
+            <div><span>Provider</span><b id="aiProvider">—</b></div>
+            <div><span>Readiness</span><b id="aiReadiness">—</b></div>
+          </div>
+          <div class="button-row">
+            <button id="enableAiButton" class="button primary" type="button">Enable AI host</button>
+            <button id="disableAiButton" class="button secondary" type="button">Disable AI host</button>
+          </div>
+          <small>AI is content-only. It cannot start or stop a stream, change this station's jingle setting, or override the operator.</small>
+          <p id="aiResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="status-card station-card">
+          <div class="card-heading">
+            <div>
+              <div class="eyebrow">STATIONS</div>
+              <h2>Add a working station</h2>
+            </div>
+            <span id="stationCount" class="count-badge">0</span>
+          </div>
+          <form id="stationForm" class="station-form">
+            <div class="field-grid two">
+              <label>Name<input id="stationName" required maxlength="80" placeholder="Community Radio Jazz"></label>
+              <label>Description<input id="stationDescription" maxlength="180" placeholder="Optional"></label>
+            </div>
+            <label class="check-row"><input id="configureIcecast" type="checkbox" checked> Configure Icecast output now</label>
+            <div id="icecastFields" class="field-grid output-fields">
+              <label>Host<input id="icecastHost" value="127.0.0.1" required></label>
+              <label>Port<input id="icecastPort" type="number" min="1" max="65535" value="8000" required></label>
+              <label>Mount<input id="icecastMount" value="/new-station" pattern="/.*" required></label>
+              <label>User<input id="icecastUser" value="source" required></label>
+              <label>Password<input id="icecastPassword" type="password" autocomplete="new-password" required></label>
+              <label>Format<select id="icecastProfile"><option value="aac_plus_196">AAC+ 196 kbps</option><option value="mp3_128">MP3 128 kbps</option></select></label>
+            </div>
+            <label class="check-row"><input id="activateNewStation" type="checkbox"> Make it the active broadcast target</label>
+            <button id="createStationButton" class="button primary" type="submit">Create and verify station</button>
+            <p id="stationResult" class="action-result" aria-live="polite"></p>
+          </form>
+        </article>
+      </section>
+
+      <section class="operations-grid">
+        <article class="panel emergency-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow emergency-eyebrow">EMERGENCY ROOM</div><h2>Any-page audio takeover</h2></div>
+            <div id="emergencyLamp" class="status-lamp off"><span></span><b>OFF</b></div>
+          </div>
+          <p class="card-copy">Broadcast any HTTP or HTTPS page that plays sound—public radio, a government emergency feed, a press conference, or RadioTEDU /lofi. This is not tied to YouTube. Video is never transmitted.</p>
+          <div class="path-picker-row emergency-url-row">
+            <label>Web page URL<input id="emergencyUrl" type="url" inputmode="url" placeholder="https://example.org/live-radio" autocomplete="url"></label>
+            <button id="emergencyLofiButton" class="button secondary" type="button">Use RadioTEDU /lofi</button>
+          </div>
+          <div class="emergency-instruction"><b>The browser will ask what to share.</b><span>Select the page that just opened and turn on <strong>Share tab audio</strong>. The first red-button press arms takeover; the second press confirms it.</span></div>
+          <div class="state-strip emergency-states">
+            <div><span>Program</span><b id="emergencyProgramState">Normal</b></div>
+            <div><span>Tab signal</span><b id="emergencySignalState">Off</b></div>
+            <div><span>Buffer</span><b id="emergencyBufferState">0 ms</b></div>
+            <div><span>Source</span><b id="emergencySourceState">Not selected</b></div>
+          </div>
+          <div class="button-row emergency-buttons">
+            <button id="startEmergencyButton" class="button danger" type="button">Arm emergency takeover</button>
+            <button id="stopEmergencyButton" class="button secondary" type="button" disabled>Stop emergency audio — restore playlist</button>
+          </div>
+          <p id="emergencyResult" class="action-result" aria-live="assertive"></p>
+        </article>
+
+        <article class="panel timeline-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">LIVE TIMELINE</div><h2>Remaining and forecasted songs</h2></div>
+            <div id="timelineClock" class="mini-state">--:--:--</div>
+          </div>
+          <div class="timeline-now" aria-live="polite">
+            <div class="timeline-now-copy">
+              <span>PLAYING NOW</span>
+              <strong id="timelineNowTitle">Waiting for playout</strong>
+              <small id="timelineNowArtist">--</small>
+            </div>
+            <div class="timeline-countdown">
+              <b id="timelineRemaining">--:--</b>
+              <span id="timelineEndTime">End time unavailable</span>
+            </div>
+          </div>
+          <div class="timeline-progress" aria-hidden="true"><span id="timelineProgressBar"></span></div>
+          <div class="forecast-heading"><span>UPCOMING</span><span>START / END</span></div>
+          <ol id="forecastList" class="forecast-list"></ol>
+        </article>
+      </section>
+
+      <section class="library-management-grid">
+        <article class="panel library-profile-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">STATION LIBRARY</div><h2>Managed music folder</h2></div>
+            <div id="libraryProfileState" class="mini-state">Not configured</div>
+          </div>
+          <p class="card-copy">Give each station its own folder. Exact replacement makes autoplay and the pending queue use only music from that folder while allowing the current song to finish cleanly.</p>
+          <div id="libraryManagedPath" class="managed-path">Choose a folder below, then sync and verify it.</div>
+          <form id="libraryFolderForm" class="library-folder-form">
+            <div class="path-picker-row"><label>Music folder<input id="libraryFolder" type="text" required autocomplete="off" placeholder="D:\Radio\Music\Pop"></label><button id="browseLibraryFolderButton" class="button secondary" type="button">Browse folders</button></div>
+            <div class="field-grid profile-fields">
+              <label>Profile label<input id="libraryProfileLabel" type="text" maxlength="80" placeholder="Rock, Pop, Jazz, News..."></label>
+              <label>Default genre<input id="libraryDefaultGenre" type="text" maxlength="80" placeholder="Rock"></label>
+              <label>Default language<input id="libraryDefaultLanguage" type="text" maxlength="24" placeholder="en"></label>
+            </div>
+            <div class="library-sync-options">
+              <label class="check-row"><input id="libraryRecursive" type="checkbox" checked> Include subfolders</label>
+              <label class="check-row"><input id="libraryReplaceOutside" type="checkbox" checked> Exact replacement: deactivate this station's music outside the folder and remove it from the pending queue</label>
+            </div>
+            <div class="button-row">
+              <button id="syncLibraryButton" class="button primary" type="submit">Sync folder and verify station library</button>
+              <button id="rescanLibraryButton" class="button secondary" type="button">Rescan managed folder now</button>
+            </div>
+          </form>
+          <p id="librarySyncResult" class="action-result" aria-live="polite"></p>
+        </article>
+      </section>
+
+      <section class="configuration-grid">
+        <article class="panel configuration-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">CURRENT STATION</div><h2>Identity and broadcast output</h2></div>
+            <div id="outputConfigState" class="mini-state">Loading</div>
+          </div>
+          <p class="card-copy">Edit the selected station in place. Saving applies the output configuration and verifies the stored values; testing confirms that the destination is reachable.</p>
+          <form id="currentOutputForm" class="operator-form">
+            <div class="field-grid two">
+              <label>Station name<input id="currentStationName" required maxlength="80"></label>
+              <label>Output gain (dB)<input id="currentOutputGain" type="number" min="-30" max="12" step="0.5" value="0"></label>
+            </div>
+            <label class="switch-row"><span><b>Icecast stream</b><small>Send this station to its public mount</small></span><input id="currentIcecastEnabled" type="checkbox" checked></label>
+            <div id="currentIcecastFields" class="field-grid">
+              <label>Host<input id="currentIcecastHost" required></label>
+              <label>Port<input id="currentIcecastPort" type="number" min="1" max="65535" required></label>
+              <label>Mount<input id="currentIcecastMount" pattern="/.*" required></label>
+              <label>Source user<input id="currentIcecastUser" required></label>
+              <label>Source password<input id="currentIcecastPassword" type="password" autocomplete="new-password"></label>
+              <label>Codec<select id="currentIcecastProfile"><option value="aac_plus_196">AAC+ 196 kbps</option><option value="mp3_128">MP3 128 kbps</option></select></label>
+            </div>
+            <label class="switch-row"><span><b>Local monitor</b><small>Also play this station through a selected local audio device</small></span><input id="currentLocalEnabled" type="checkbox"></label>
+            <label id="currentDeviceLabel">Monitor device<select id="currentOutputDevice"><option value="">Choose an output device</option></select></label>
+            <div class="button-row">
+              <button id="saveCurrentOutputButton" class="button primary" type="submit">Save, apply, and verify output</button>
+              <button id="testCurrentOutputButton" class="button secondary" type="button">Test stream destination</button>
+            </div>
+          </form>
+          <p id="outputConfigResult" class="action-result" aria-live="polite"></p>
+          <div class="danger-zone"><button id="deleteStationButton" class="button danger compact" type="button">Delete this station</button></div>
+        </article>
+
+        <article class="panel configuration-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">AI HOST</div><h2>Complete AI configuration</h2></div>
+            <div id="aiConfigState" class="mini-state">Loading</div>
+          </div>
+          <p class="card-copy">Everything needed to enable, tune, save, and test the station voice is available here. AI can always be disabled without stopping music.</p>
+          <form id="aiConfigForm" class="operator-form">
+            <label class="switch-row"><span><b>Enable AI host</b><small>Generate station voice and music introductions</small></span><input id="aiConfigEnabled" type="checkbox"></label>
+            <div class="field-grid two">
+              <label>Language model<input id="aiLlmModel" required></label>
+              <label>Voice provider<select id="aiTtsProvider"><option value="local-qwen-tts">Local Qwen TTS</option><option value="edge-tts">Edge TTS</option><option value="omnivoice">OmniVoice</option></select></label>
+              <label>Voice persona<select id="aiVoicePersona"><option value="auto">Automatic</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option><option value="evening">Evening</option><option value="night">Night</option><option value="warm_radio_host">Warm radio host</option><option value="professional_announcer">Professional announcer</option></select></label>
+              <label>TTS model path<input id="aiTtsModelPath" placeholder="Optional for managed local runtime"></label>
+              <label>Maximum announcement (seconds)<input id="aiMaxSeconds" type="number" min="3" max="120" value="15" required></label>
+              <label>Station ID interval (seconds)<input id="aiStationInterval" type="number" min="60" max="86400" value="1800" required></label>
+            </div>
+            <div class="field-grid two">
+              <label class="check-row"><input id="aiIncludeHistory" type="checkbox" checked> Use music history in prompts</label>
+              <label class="check-row"><input id="aiEducational" type="checkbox"> Allow educational segments</label>
+            </div>
+            <label>Prompt template<textarea id="aiPromptTemplate" required></textarea></label>
+            <div class="button-row">
+              <button id="saveAiConfigButton" class="button primary" type="submit">Save and verify AI configuration</button>
+              <button id="testAiButton" class="button secondary" type="button">Generate and verify test voice</button>
+            </div>
+          </form>
+          <p id="aiConfigResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="panel configuration-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">RADIOTEDU SERVICES</div><h2>Voting and Study adapters</h2></div>
+            <div id="integrationState" class="mini-state">Loading</div>
+          </div>
+          <p class="card-copy">These adapters are optional. If RadioTEDU services are unavailable, music, schedules, microphone, and streaming continue normally.</p>
+          <form id="integrationForm" class="operator-form">
+            <label class="switch-row"><span><b>Enable next-song voting</b><small>Use the canonical RadioTEDU voting-agent API</small></span><input id="votingEnabled" type="checkbox"></label>
+            <div class="field-grid two">
+              <label>Voting API base URL<input id="votingBaseUrl" type="url" placeholder="https://radiotedu.com/jukebox/api/v1"></label>
+              <label>Agent device ID<input id="votingDeviceId" maxlength="120" placeholder="onair-main-studio"></label>
+              <label>Agent token<input id="votingAgentToken" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved token"></label>
+            </div>
+            <label class="switch-row"><span><b>Enable Study link</b><small>Keep Study as its existing authenticated external experience</small></span><input id="studyEnabled" type="checkbox"></label>
+            <label>Study URL<input id="studyBaseUrl" type="url" placeholder="https://radiotedu.com/jukebox/api/v1/study"></label>
+            <div class="button-row">
+              <button id="saveIntegrationsButton" class="button primary" type="submit">Save integration settings</button>
+              <button id="testIntegrationsButton" class="button secondary" type="button">Test optional services</button>
+              <button id="publishVotingRoundButton" class="button secondary" type="button">Publish next 3 queued songs</button>
+            </div>
+          </form>
+          <p id="integrationResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="panel configuration-panel readiness-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">READINESS</div><h2>Installation self-check</h2></div>
+            <div id="readinessState" class="mini-state">Checking</div>
+          </div>
+          <p class="card-copy">This is the authoritative setup report for the selected station. Green checks are ready; failed checks include a direct explanation.</p>
+          <ol id="readinessList" class="readiness-list"></ol>
+          <div class="button-row">
+            <button id="refreshReadinessButton" class="button secondary" type="button">Run self-check</button>
+            <button id="repairDependenciesButton" class="button primary" type="button">Repair managed dependencies</button>
+          </div>
+          <p id="readinessResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="panel configuration-panel account-panel">
+          <div class="panel-heading"><div><div class="eyebrow">ACCOUNT</div><h2>Change operator password</h2></div></div>
+          <p class="card-copy">Change your own password here. Existing sessions are revoked after a successful change, then you sign in again with the new password.</p>
+          <form id="passwordForm" class="operator-form account-form">
+            <label>Current password<input id="currentPassword" type="password" autocomplete="current-password" required></label>
+            <div class="field-grid two">
+              <label>New password<input id="newPassword" type="password" minlength="5" autocomplete="new-password" required></label>
+              <label>Repeat new password<input id="repeatPassword" type="password" minlength="5" autocomplete="new-password" required></label>
+            </div>
+            <button id="changePasswordButton" class="button primary" type="submit">Change password</button>
+          </form>
+          <p id="passwordResult" class="action-result" aria-live="polite"></p>
+        </article>
+      </section>
+
+      <section class="workspace-grid">
+        <article class="panel queue-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">PLAYOUT</div><h2>Broadcast queue</h2></div>
+            <button id="queueRefreshButton" class="button ghost compact" type="button">Reload</button>
+          </div>
+          <div id="queueList" class="queue-list" aria-live="polite"></div>
+          <p id="queueResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="panel library-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">LIBRARY</div><h2>Add tracks to queue</h2></div>
+            <span id="libraryCount" class="count-badge">0</span>
+          </div>
+          <form id="librarySearchForm" class="search-row">
+            <input id="librarySearch" type="search" placeholder="Title, artist, album…" aria-label="Search library">
+            <select id="libraryType" aria-label="Track type"><option value="">All audio</option><option value="music">Music</option><option value="jingle">Jingles</option><option value="ads">Ads</option></select>
+            <button class="button secondary compact" type="submit">Search</button>
+          </form>
+          <div id="libraryList" class="library-list" aria-live="polite"></div>
+          <div class="pagination-row">
+            <button id="libraryPrev" class="button ghost compact" type="button">Previous</button>
+            <span id="libraryPage">Page 1</span>
+            <button id="libraryNext" class="button ghost compact" type="button">Next</button>
+          </div>
+          <p id="libraryResult" class="action-result" aria-live="polite"></p>
+        </article>
+      </section>
+
+      <section class="jingle-grid">
+        <article class="panel">
+          <div class="panel-heading"><div><div class="eyebrow">JINGLES</div><h2>Upload a jingle</h2></div><span id="jingleCount" class="count-badge">0</span></div>
+          <form id="jingleUploadForm" class="upload-form">
+            <label class="file-drop">Audio files<input id="jingleFiles" type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple required><span id="jingleFileLabel">Choose one or more jingle files</span></label>
+            <button id="uploadJingleButton" class="button primary" type="submit">Upload and verify jingles</button>
+          </form>
+          <p id="jingleResult" class="action-result" aria-live="polite"></p>
+          <form id="jingleFolderForm" class="operator-form jingle-folder-form">
+            <div class="path-picker-row"><label>Managed jingle folder<input id="jingleFolder" type="text" autocomplete="off" placeholder="D:\Radio\Jingles"></label><button id="browseJingleFolderButton" class="button secondary" type="button">Browse folders</button></div>
+            <label class="check-row"><input id="jingleFolderReplace" type="checkbox"> Exact replacement for this station's jingles</label>
+            <button id="syncJingleFolderButton" class="button secondary" type="submit">Sync folder and verify jingles</button>
+          </form>
+          <div id="jingleList" class="jingle-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><div class="eyebrow">AUTOMATION</div><h2>Automatic jingles</h2></div><div id="sweeperLamp" class="mini-state">—</div></div>
+          <form id="sweeperForm" class="sweeper-form">
+            <label class="switch-row"><span><b>Insert jingles automatically</b><small>Cycles only this station's jingles after a song finishes</small></span><input id="sweeperEnabled" type="checkbox"></label>
+            <label>Songs between jingles<input id="sweeperInterval" type="number" min="1" max="100" step="1" value="2" required></label>
+            <label>Jingle selection order
+              <select id="sweeperMode">
+                <option value="ordered">In library order</option>
+                <option value="random">Random</option>
+              </select>
+            </label>
+            <small>Default: one jingle after every 2 completed songs. Enter 3 for every 3 songs, or any value from 1 to 100. The current song always finishes first.</small>
+            <button id="saveSweeperButton" class="button primary" type="submit">Save and verify my jingle rule</button>
+          </form>
+          <p id="sweeperResult" class="action-result" aria-live="polite"></p>
+        </article>
+
+        <article class="panel activity-panel">
+          <div class="panel-heading"><div><div class="eyebrow">CONFIRMATION</div><h2>Operator activity</h2></div><button id="clearActivityButton" class="button ghost compact" type="button">Clear</button></div>
+          <ol id="activityList" class="activity-list"></ol>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><span class="spinner"></span><b id="busyTitle">Working…</b><small id="busyDetail">Waiting for verified state</small></div></div>
+  <div id="toastRegion" class="toast-region" aria-live="assertive"></div>
+    <script src="/static/deterministic-wall/app.js?v=10" defer></script>
+</body>
+</html>

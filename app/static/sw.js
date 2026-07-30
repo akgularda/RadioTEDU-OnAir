@@ -1,0 +1,89 @@
+const CACHE_NAME = 'RadioTEDU-OnAir-shell-v8';
+const SHELL_ASSETS = [
+    '/',
+    '/app',
+    '/app/',
+    '/login.html',
+    '/static/css/main.css?v=20',
+    '/static/js/lobby.js?v=3',
+    '/static/js/runtime-indicator.js?v=1',
+    '/static/js/mic.js?v=1',
+    '/static/js/soundboard.js?v=3',
+    '/static/js/app.js?v=22',
+    '/static/js/setup-wizard.js?v=4',
+    '/static/js/studio.js?v=1',
+    '/static/js/ai-host.js?v=4',
+    '/static/icons/icon.png',
+    '/static/icons/icon-192.png',
+    '/static/icons/icon-512.png',
+    '/static/manifest.json',
+];
+const SHELL_ASSET_SET = new Set(SHELL_ASSETS);
+const SHELL_CANONICAL_PATHS = new Set(['/', '/app', '/app/', '/login.html']);
+
+function normalizeShellCacheKey(requestUrl) {
+    const url = new URL(requestUrl);
+    const exactKey = `${url.pathname}${url.search}`;
+    if (SHELL_ASSET_SET.has(exactKey)) {
+        return exactKey;
+    }
+    if (SHELL_CANONICAL_PATHS.has(url.pathname)) {
+        return url.pathname;
+    }
+    return exactKey;
+}
+
+function isShellAsset(requestUrl) {
+    return SHELL_ASSET_SET.has(normalizeShellCacheKey(requestUrl));
+}
+
+self.addEventListener('install', event => {
+    event.waitUntil(
+        caches.open(CACHE_NAME).then(async cache => {
+            await cache.addAll(SHELL_ASSETS);
+            if (typeof self.skipWaiting === 'function') {
+                await self.skipWaiting();
+            }
+        })
+    );
+});
+
+self.addEventListener('activate', event => {
+    event.waitUntil(
+        caches.keys().then(async keys => {
+            await Promise.all(
+                keys
+                    .filter(key => (
+                        key.startsWith('cleanroom-shell-')
+                        || key.startsWith('RadioTEDU-OnAir-')
+                        || key.startsWith('radiotedu-broadcast-wall-shell-')
+                    ) && key !== CACHE_NAME)
+                    .map(key => caches.delete(key))
+            );
+            if (self.clients && typeof self.clients.claim === 'function') {
+                await self.clients.claim();
+            }
+        })
+    );
+});
+
+self.addEventListener('fetch', event => {
+    const { request } = event;
+    if (request.method !== 'GET' || request.url.includes('/api/') || !isShellAsset(request.url)) {
+        return;
+    }
+    const cacheKey = normalizeShellCacheKey(request.url);
+    event.respondWith(
+        caches.open(CACHE_NAME).then(async cache => {
+            const hit = await cache.match(cacheKey);
+            if (hit) {
+                return hit;
+            }
+            const response = await fetch(request);
+            if (response && response.ok) {
+                cache.put(cacheKey, response.clone());
+            }
+            return response;
+        })
+    );
+});
