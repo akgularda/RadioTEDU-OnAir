@@ -62,7 +62,12 @@ class IcecastAudioSink:
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            # FFmpeg can keep retrying a failed Icecast handshake for a long
+            # time.  An unread PIPE eventually fills and freezes the encoder
+            # while the process still appears alive.  Discard stderr here;
+            # connection health is reported separately without risking secret
+            # bearing command lines in logs.
+            stderr=subprocess.DEVNULL,
         )
         # Give FFmpeg a moment to start; if it dies immediately (bad password,
         # unreachable host) we should report failure rather than returning a dead process.

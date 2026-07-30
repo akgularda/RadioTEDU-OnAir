@@ -1,6 +1,7 @@
 import sys
 import json
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -1472,6 +1473,29 @@ class PlayoutHardeningTests(unittest.TestCase):
         self.assertEqual(len(spawned), 0)
         self.assertIs(sink._encoder_process, stale_encoder)
         self.assertIs(sink._process, stale_uploader)
+
+    def test_icecast_sink_does_not_leave_ffmpeg_stderr_pipe_unread(self):
+        spawned = []
+
+        def spawn(_cmd, **kwargs):
+            spawned.append(kwargs)
+            return FakeProc()
+
+        cfg = StationPipelineConfig(
+            input_uri="test://song",
+            icecast_host="127.0.0.1",
+            icecast_port=8000,
+            icecast_mount="/lofi",
+            icecast_user="source",
+            icecast_password="secret",
+            local_output_enabled=False,
+            output_device_id="",
+        )
+
+        IcecastAudioSink("ffmpeg", spawn).ensure_started(cfg)
+
+        self.assertEqual(len(spawned), 1)
+        self.assertIs(spawned[0]["stderr"], subprocess.DEVNULL)
 
     def test_supervisor_does_not_stop_icecast_on_degraded_health(self):
         registry = FakeSupervisorRegistry(
