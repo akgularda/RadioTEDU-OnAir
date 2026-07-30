@@ -37,8 +37,10 @@ def test_worker_falls_back_to_filename_for_missing_metadata(tmp_path, monkeypatc
         (21, "Metadata Test"),
     )
     cur.execute(
-        "INSERT INTO tracks (id, title, artist, musicbrainz_recordingid, file_path) VALUES (?, ?, ?, ?, ?)",
-        (901, "", "", "", "C:/music/My%20Song.mp3"),
+        "INSERT INTO tracks "
+        "(id, station_id, title, artist, musicbrainz_recordingid, file_path) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (901, 21, "", "", "", "C:/music/My%20Song.mp3"),
     )
     conn.commit()
 

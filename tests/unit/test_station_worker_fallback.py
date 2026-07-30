@@ -15,6 +15,7 @@ class _FakeRuntimeRegistry:
         self.transition_active: dict[int, bool] = {}
         self.branch_health: dict[int, dict[str, bool]] = {}
         self.required_outputs: dict[int, dict[str, bool]] = {}
+        self.active_input_uri: dict[int, str] = {}
 
     def start_station(
         self,
@@ -54,6 +55,7 @@ class _FakeRuntimeRegistry:
             "transition_active": bool(self.transition_active.get(sid, False)),
             "branch_health": branch_health,
             "required_outputs": required_outputs,
+            "active_input_uri": self.active_input_uri.get(sid, ""),
         }
 
 
@@ -161,6 +163,99 @@ def test_worker_process_once_stays_idle_when_library_has_no_autoplay_candidates(
 
     assert result == {"source": "none"}
     assert runtime.started == []
+
+
+def test_worker_autofill_is_strictly_isolated_to_its_station(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO stations (id, name) VALUES (2, 'Lo-Fi')")
+    cur.execute(
+        "INSERT INTO tracks "
+        "(station_id, title, artist, genre, track_type, duration, file_path, "
+        "is_active, play_count, exclude_from_autoplay) "
+        "VALUES (1, 'Classical Leak', 'Orchestra', 'Classical', 'music', "
+        "240, 'E:/classical/leak.flac', 1, 0, 0)"
+    )
+    classical_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO tracks "
+        "(station_id, title, artist, genre, track_type, duration, file_path, "
+        "is_active, play_count, exclude_from_autoplay) "
+        "VALUES (2, 'Lo-Fi Only', 'Beatmaker', 'Lo-Fi', 'music', "
+        "180, 'E:/lofi/only.mp3', 1, 12, 0)"
+    )
+    lofi_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO queue_items "
+        "(station_id, track_id, position, status, started_at, dedupe_key) "
+        "VALUES (2, ?, 1, 'playing', CURRENT_TIMESTAMP, 'legacy-playing')",
+        (classical_id,),
+    )
+    cur.execute(
+        "INSERT INTO queue_items "
+        "(station_id, track_id, position, status, dedupe_key) "
+        "VALUES (2, ?, 2, 'pending', 'legacy-pending')",
+        (classical_id,),
+    )
+    conn.commit()
+
+    runtime = _FakeRuntimeRegistry()
+    runtime.running[2] = True
+    runtime.active_input_uri[2] = "E:/classical/leak.flac"
+    worker = StationWorker(station_id=2, runtime_registry=runtime)
+
+    result = worker.process_once()
+
+    assert result["source"] == "manual"
+    assert result["input_uri"] == "E:/lofi/only.mp3"
+    assert runtime.started[-1]["input_uri"] == "E:/lofi/only.mp3"
+    active_rows = conn.execute(
+        "SELECT q.track_id, t.station_id AS track_station, q.status "
+        "FROM queue_items q JOIN tracks t ON t.id=q.track_id "
+        "WHERE q.station_id=2 AND q.status IN ('pending','playing')"
+    ).fetchall()
+    assert active_rows
+    assert {int(row["track_station"]) for row in active_rows} == {2}
+    assert any(int(row["track_id"]) == lofi_id for row in active_rows)
+
+
+def test_worker_recovers_when_live_runtime_uri_does_not_match_playing_item(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO stations (id, name) VALUES (2, 'Lo-Fi')")
+    cur.execute(
+        "INSERT INTO tracks "
+        "(station_id, title, artist, track_type, duration, file_path, "
+        "is_active, play_count, exclude_from_autoplay) "
+        "VALUES (2, 'Expected Lo-Fi', 'Beatmaker', 'music', 180, "
+        "'E:/lofi/expected.mp3', 1, 0, 0)"
+    )
+    track_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO queue_items "
+        "(station_id, track_id, position, status, started_at, dedupe_key) "
+        "VALUES (2, ?, 1, 'playing', CURRENT_TIMESTAMP, 'expected')",
+        (track_id,),
+    )
+    conn.commit()
+
+    runtime = _FakeRuntimeRegistry()
+    runtime.running[2] = True
+    runtime.active_input_uri[2] = "E:/classical/wrong.flac"
+    worker = StationWorker(station_id=2, runtime_registry=runtime)
+
+    result = worker.process_once()
+
+    assert result == {"source": "playing", "reason": "track_in_progress"}
+    assert runtime.started[-1]["input_uri"] == "E:/lofi/expected.mp3"
 
 
 def test_worker_process_once_does_not_sync_preload_upcoming_ai_announcements(

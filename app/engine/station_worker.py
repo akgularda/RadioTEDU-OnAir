@@ -1051,6 +1051,23 @@ class StationWorker:
         ).total_seconds()
         duration = float(playing["duration"] or 0.0)
 
+        # A healthy encoder process can still be rendering the wrong file after
+        # a stale queue transition. Process liveness alone must not freeze the
+        # queue indefinitely; reconcile its active URI with the playing row.
+        if self.runtime_registry:
+            rt_status = self.runtime_registry.status(self.station_id)
+            track_uri, _title, _artist, _track_type = self._track_runtime_fields(
+                int(playing["track_id"] or 0)
+            )
+            if (
+                track_uri
+                and self._runtime_playback_alive(rt_status)
+                and not self._runtime_playback_matches(rt_status, track_uri)
+            ):
+                return self._restart_playing_queue_item_if_runtime_mismatched(
+                    playing
+                )
+
         # ── Safety: absolute max timeout per track ────────────
         # Prevents tracks from being stuck forever (hung process,
         # wrong metadata, etc.). Music is capped at 30 minutes; known-duration
@@ -1455,6 +1472,47 @@ class StationWorker:
         )
         return {int(r["track_id"]) for r in cur.fetchall()}
 
+    def _fail_cross_station_queue_items(self) -> int:
+        """Quarantine queue rows whose track belongs to another station."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT q.id "
+            "FROM queue_items q "
+            "JOIN tracks t ON t.id=q.track_id "
+            "WHERE q.station_id=? AND t.station_id<>? "
+            "AND q.status IN ('pending','playing')",
+            (self.station_id, self.station_id),
+        )
+        invalid_ids = [int(row["id"]) for row in cur.fetchall()]
+        if not invalid_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in invalid_ids)
+        cur.execute(
+            f"UPDATE queue_items SET status='failed', "
+            f"finished_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+            tuple(invalid_ids),
+        )
+        self.conn.commit()
+
+        current = self.playout_state.get_current(self.station_id)
+        if (
+            str(current.get("source") or "") == "manual"
+            and current.get("item_id") is not None
+            and int(current["item_id"]) in invalid_ids
+        ):
+            self._set_playout_state(
+                "none", None, reason="manual_cross_station_track_quarantined"
+            )
+
+        _log.error(
+            "Quarantined %d cross-station queue item(s) for station_id=%s",
+            len(invalid_ids),
+            self.station_id,
+        )
+        self._broadcast_worker_state(include_queue=True, include_track=True)
+        return len(invalid_ids)
+
     def _recent_track_ids(self, limit: int = 30) -> set[int]:
         """Get recently played/queued track_ids to avoid repeats."""
         cur = self.conn.cursor()
@@ -1477,7 +1535,7 @@ class StationWorker:
             "COALESCE(file_path, '') <> ''",
             "LOWER(COALESCE(track_type, 'music'))='music'",
             "COALESCE(exclude_from_autoplay, 0)=0",
-            "(station_id=? OR station_id=1)",
+            "station_id=?",
         ]
         params: list = [self.station_id]
         if blocked:
@@ -1958,6 +2016,10 @@ class StationWorker:
 
         # On first tick after startup, insert the startup sound at front of queue
         self._maybe_insert_startup_sound()
+
+        # A station is an isolation boundary. Repair legacy/corrupt queue rows
+        # before measuring, filling, or selecting the next item.
+        self._fail_cross_station_queue_items()
 
         # Auto-fill queue BEFORE advance check so that crossfade timing
         # can see the next pending track when deciding when to advance.
