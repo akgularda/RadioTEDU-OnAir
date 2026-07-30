@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## 1.0.0 — 2026-07-30
 
 - Rebranded the deterministic multi-station operator surface as RadioTEDU OnAir.
 - Added a dedicated RadioTEDU OnAir program mark alongside the official RadioTEDU and RTAI logos.
