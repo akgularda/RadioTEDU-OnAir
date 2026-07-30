@@ -24,6 +24,7 @@ _ICECAST_METADATA_RETRY_DELAYS_SECONDS = (0.0, 0.3, 0.6, 1.2, 2.5)
 # so a push at track-start can silently fail and leave now-playing stale for a
 # whole song; periodic re-push bounds that staleness to this interval.
 _ICECAST_METADATA_REFRESH_SECONDS = 20.0
+_ICECAST_METADATA_BACKOFF_MAX_SECONDS = 300.0
 _OUTPUT_RECOVERY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 _DEFAULT_LIVE_AUDIO_SETTINGS = {
     "program_music_mode": "normal",
@@ -444,6 +445,8 @@ class StationRuntimeRegistry:
         self._metadata_sent_lock = threading.Lock()
         self._metadata_delivery_status: dict[int, dict] = {}
         self._metadata_delivery_status_lock = threading.Lock()
+        self._metadata_retry_state: dict[int, dict] = {}
+        self._metadata_retry_state_lock = threading.Lock()
         self._metadata_worker_events: dict[int, threading.Event] = {}
         self._metadata_worker_started: set[int] = set()
         self._metadata_worker_lock = threading.Lock()
@@ -531,9 +534,48 @@ class StationRuntimeRegistry:
         if sent:
             with self._metadata_sent_lock:
                 self._metadata_sent[sid] = song
+        self._record_metadata_retry_outcome(sid, sent)
         if results:
             self._record_metadata_delivery_status(sid, song, sent, results)
         return sent
+
+    def _record_metadata_retry_outcome(self, station_id: int, ok: bool) -> None:
+        sid = int(station_id)
+        with self._metadata_retry_state_lock:
+            if ok:
+                self._metadata_retry_state.pop(sid, None)
+                return
+            previous = dict(self._metadata_retry_state.get(sid, {}))
+            failures = min(16, int(previous.get("failures", 0)) + 1)
+            delay = min(
+                _ICECAST_METADATA_BACKOFF_MAX_SECONDS,
+                _ICECAST_METADATA_REFRESH_SECONDS
+                * (2 ** max(0, failures - 1)),
+            )
+            self._metadata_retry_state[sid] = {
+                "failures": failures,
+                "next_retry_monotonic": time.monotonic() + delay,
+            }
+
+    def _metadata_retry_ready(self, station_id: int) -> bool:
+        with self._metadata_retry_state_lock:
+            state = dict(self._metadata_retry_state.get(int(station_id), {}))
+        return time.monotonic() >= float(
+            state.get("next_retry_monotonic", 0.0)
+        )
+
+    def _metadata_retry_payload(self, station_id: int) -> dict:
+        with self._metadata_retry_state_lock:
+            state = dict(self._metadata_retry_state.get(int(station_id), {}))
+        retry_in = max(
+            0.0,
+            float(state.get("next_retry_monotonic", 0.0))
+            - time.monotonic(),
+        )
+        return {
+            "failure_count": int(state.get("failures", 0)),
+            "retry_in_seconds": round(retry_in, 1),
+        }
 
     def _record_metadata_delivery_status(
         self, station_id: int, song: str, ok: bool, outputs: list[dict]
@@ -566,6 +608,7 @@ class StationRuntimeRegistry:
                 "updated_at": time.time(),
                 "last_error": last_error,
                 "outputs": sanitized,
+                "retry": self._metadata_retry_payload(station_id),
             }
 
     def _metadata_delivery_payload(self, station_id: int) -> dict:
@@ -605,6 +648,8 @@ class StationRuntimeRegistry:
         require_running: bool = False,
     ) -> None:
         sid = int(station_id)
+        if require_running and not self._metadata_retry_ready(sid):
+            return
         while True:
             restart_for_newer = False
             for delay in _ICECAST_METADATA_RETRY_DELAYS_SECONDS:
@@ -670,6 +715,8 @@ class StationRuntimeRegistry:
                         already_delivered = self._metadata_sent.get(int(station_id)) == song
                     if already_delivered:
                         continue  # current now-playing already confirmed on the origin
+                    if not self._metadata_retry_ready(int(station_id)):
+                        continue
                     # Missing or stale on the origin (or a prior push failed) -> push
                     # and keep retrying on each cycle until it lands.
                     self._push_metadata_now(station_id, cfg)

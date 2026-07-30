@@ -107,3 +107,37 @@ def test_bootstrap_records_failure_without_raising(tmp_path, monkeypatch):
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["yt-dlp.exe"]["status"] == "failed"
     assert "boom" in payload["yt-dlp.exe"]["error"]
+
+
+def test_bootstrap_keeps_valid_binary_when_windows_replacement_is_denied(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_TOOLS_DIR", str(tmp_path / "tools"))
+    monkeypatch.setattr("app.dependency_bootstrap._meipass_dir", lambda: None)
+    monkeypatch.setattr(
+        "app.dependency_bootstrap._dependencies",
+        lambda: (
+            ManagedDependency(
+                "yt-dlp.exe",
+                "download",
+                download_url="https://example.com/yt-dlp.exe",
+            ),
+        ),
+    )
+    validation_results = iter((False, True))
+    monkeypatch.setattr(
+        "app.dependency_bootstrap._validate_binary",
+        lambda *_args, **_kwargs: next(validation_results),
+    )
+    monkeypatch.setattr(
+        "app.dependency_bootstrap._download_to_path",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError("replacement denied")
+        ),
+    )
+
+    result = bootstrap_dependencies()
+
+    assert result["yt-dlp.exe"]["installed"] is True
+    assert result["yt-dlp.exe"]["status"] == "ready"
+    assert result["yt-dlp.exe"]["error"] == ""

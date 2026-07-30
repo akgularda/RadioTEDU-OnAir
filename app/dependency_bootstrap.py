@@ -602,8 +602,17 @@ def bootstrap_dependencies() -> dict[str, dict]:
                     entry["installed"] = True
                     entry["status"] = "installed"
             except Exception as exc:
-                entry["status"] = "failed"
-                entry["error"] = str(exc)
+                # Windows can transiently deny replacement while another
+                # process or security scanner still has the managed binary
+                # open. Preserve a valid existing executable instead of
+                # turning a harmless update race into a startup failure.
+                if _validate_binary(target, dependency.validation_args):
+                    entry["installed"] = True
+                    entry["status"] = "ready"
+                    entry["error"] = ""
+                else:
+                    entry["status"] = "failed"
+                    entry["error"] = str(exc)
 
             current_state[dependency.executable_name] = entry
 

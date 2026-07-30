@@ -766,7 +766,14 @@ function renderReadiness() {
   const checks = Array.isArray(setup.checks) ? setup.checks : [];
   const node = $('readinessList');
   if (!node) return;
-  node.innerHTML = checks.length ? checks.map((check) => `<li class="${check.ready ? 'ready' : ''}"><span><b>${escapeHtml(check.label || check.name || 'Check')}</b>${escapeHtml(check.message || (check.ready ? 'Ready' : 'Needs attention'))}</span></li>`).join('') : '<li><span><b>Self-check unavailable</b>Run the check again when the backend is connected.</span></li>';
+  node.innerHTML = checks.length ? checks.map((check) => {
+    const optional = check.required === false && !check.ready;
+    const className = check.ready ? 'ready' : (optional ? 'optional' : '');
+    const label = optional
+      ? `${check.label || check.name || 'Check'} · Optional`
+      : (check.label || check.name || 'Check');
+    return `<li class="${className}"><span><b>${escapeHtml(label)}</b>${escapeHtml(check.message || (check.ready ? 'Ready' : 'Needs attention'))}</span></li>`;
+  }).join('') : '<li><span><b>Self-check unavailable</b>Run the check again when the backend is connected.</span></li>';
   const blocking = Array.isArray(setup.blocking_reasons)
     ? setup.blocking_reasons
     : (Array.isArray(setup.blocking) ? setup.blocking : []);

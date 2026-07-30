@@ -717,6 +717,12 @@ class PlayoutHardeningTests(unittest.TestCase):
         self.assertEqual(delivery["song"], "Artist - Song")
         self.assertIn("Remote end closed", delivery["last_error"])
         self.assertEqual(delivery["outputs"][0]["mount"], "/station1")
+        self.assertEqual(delivery["retry"]["failure_count"], 1)
+        self.assertGreater(delivery["retry"]["retry_in_seconds"], 0)
+        self.assertFalse(registry._metadata_retry_ready(1))
+
+        registry._metadata_retry_state[1]["next_retry_monotonic"] = 0
+        self.assertTrue(registry._metadata_retry_ready(1))
 
     def test_metadata_send_requires_each_configured_output(self):
         class FakeResponse:

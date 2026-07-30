@@ -43,6 +43,10 @@ def test_smoke_script_seeds_local_tools_dir_and_cleans_process_tree():
     assert "Get-FreeTcpPort" in script
     assert "Assert-TcpPortAvailable" in script
     assert "Start-BackendProcess" in script
+    assert script.count("Seed-SmokeToolsDir -ToolsDir $toolsDir") == 1
+    assert script.index("Seed-SmokeToolsDir -ToolsDir $toolsDir") < script.index(
+        "while ($attempt -lt $maxAttempts)"
+    )
 
 
 def test_smoke_script_refuses_to_run_when_backend_port_is_already_occupied(tmp_path):

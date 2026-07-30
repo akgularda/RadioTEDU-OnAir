@@ -46,11 +46,16 @@ def test_operator_wall_exposes_every_self_service_control():
 
 def test_operator_mutations_use_read_back_verification_and_safe_retry():
     javascript = (WALL / "app.js").read_text(encoding="utf-8")
+    stylesheet = (WALL / "styles.css").read_text(encoding="utf-8")
     assert "async function verifiedMutation" in javascript
     assert "idempotent: true" in javascript
     assert "async function saveCurrentOutput" in javascript
     assert "icecast_tls_enabled: $('currentIcecastTlsEnabled').checked" in javascript
     assert "state.setupState?.blocking_reasons" in javascript
+    assert "check.required === false" in javascript
+    assert "readiness-list li.optional::before" in stylesheet
+    assert ".file-drop { position: relative; overflow: hidden;" in stylesheet
+    assert ".file-drop input { position: absolute; inset: 0;" in stylesheet
     assert "node.type !== 'checkbox'" in javascript
     assert "async function saveAiConfiguration" in javascript
     assert "async function syncJingleFolder" in javascript

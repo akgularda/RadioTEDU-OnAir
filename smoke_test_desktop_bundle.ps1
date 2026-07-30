@@ -267,15 +267,15 @@ function Invoke-BackendSmoke {
         $perAttemptTimeoutSec = if ($BackendPort -le 0) { [Math]::Min($HealthTimeoutSec, 15) } else { $HealthTimeoutSec }
         $attempt = 0
         $lastError = $null
+        $toolsDir = $workspace.ToolsDir
+        $databasePath = $workspace.DatabasePath
+        Seed-SmokeToolsDir -ToolsDir $toolsDir | Out-Null
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $databasePath) | Out-Null
 
         while ($attempt -lt $maxAttempts) {
             $attempt++
             $selectedPort = Resolve-BackendSmokePort -BackendPort $BackendPort
             $backendDirectory = Split-Path -Parent $BackendPath
-            $toolsDir = $workspace.ToolsDir
-            $databasePath = $workspace.DatabasePath
-            Seed-SmokeToolsDir -ToolsDir $toolsDir | Out-Null
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $databasePath) | Out-Null
             $backendProcess = $null
             $healthy = $false
             $healthUri = "http://127.0.0.1:$selectedPort/api/health"

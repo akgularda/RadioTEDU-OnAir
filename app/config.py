@@ -32,6 +32,9 @@ def _frozen_data_root() -> Path:
 
 
 def get_data_root() -> Path:
+    configured = os.getenv("CLEANROOM_DATA_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return _frozen_data_root()
     return _repo_data_root()

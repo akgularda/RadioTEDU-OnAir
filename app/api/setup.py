@@ -903,6 +903,11 @@ def _build_state(request: Request | None, station_id: int) -> dict[str, Any]:
         ]
 
         required = _required_checks(config)
+        for check in checks:
+            is_required = str(check["name"]) in required
+            check["required"] = is_required
+            if not is_required and not bool(check["ready"]):
+                check["status"] = "optional"
         ready_names = {str(check["name"]) for check in checks if bool(check["ready"])}
         can_complete = required.issubset(ready_names)
         setup_marked_complete = _truthy(station_settings.get(SETUP_COMPLETED_KEY, "false")) and can_complete

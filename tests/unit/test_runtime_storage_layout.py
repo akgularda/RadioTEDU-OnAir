@@ -21,6 +21,14 @@ def test_frozen_runtime_uses_programdata_for_shared_state(monkeypatch, tmp_path)
     ).resolve()
 
 
+def test_source_runtime_honors_explicit_shared_data_root(monkeypatch, tmp_path):
+    data_root = tmp_path / "isolated-data"
+    monkeypatch.setattr(config.sys, "frozen", False, raising=False)
+    monkeypatch.setenv("CLEANROOM_DATA_ROOT", str(data_root))
+
+    assert config.get_data_root() == data_root.resolve()
+
+
 def test_frozen_runtime_keeps_binaries_beside_packaged_executable(
     monkeypatch, tmp_path
 ):

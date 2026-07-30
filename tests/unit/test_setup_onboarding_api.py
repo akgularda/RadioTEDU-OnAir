@@ -215,6 +215,22 @@ def test_setup_stream_verification_retries_after_destination_becomes_reachable(c
     assert stream_check["ready"] is True
 
 
+def test_setup_state_marks_disabled_ai_checks_optional(client, monkeypatch):
+    _make_dependencies_ready(monkeypatch)
+    _make_stream_reachable(monkeypatch)
+    station_id = _configure_setup_via_api(client, ai_enabled=False)
+
+    state = client.get("/api/setup/state", params={"station_id": station_id}).json()
+    checks = {check["name"]: check for check in state["checks"]}
+
+    assert checks["local_tts_runtime"]["required"] is False
+    assert checks["local_tts_runtime"]["status"] == "ready"
+    assert checks["ai_tts"]["required"] is False
+    assert checks["ai_tts"]["status"] == "ready"
+    assert "local_tts_runtime" not in state["required_checks"]
+    assert "ai_tts" not in state["required_checks"]
+
+
 def test_setup_stream_verification_runs_real_icecast_publish_test(client, monkeypatch):
     _make_dependencies_ready(monkeypatch)
     _make_ai_ready(monkeypatch)
