@@ -126,6 +126,34 @@ looked for the shell at the target root instead of the documented `shell`
 subdirectory; the install log confirmed the correct destination. The corrected
 second cycle produced the measurements above.
 
+## RadioTEDU repository integration verification
+
+Verified on 2026-07-30 against the pinned RadioTEDU AI, Voting, and Juke
+repositories:
+
+- OnAir broad suite: 769 passed, 3 skipped; the only first-run failure was the
+  Windows process-fingerprint timeout under concurrent packaging load.
+- Current OnAir control-plane regression after replacing that slow WMI lookup:
+  19 passed, including fixed service commands, signed Juke health, protected
+  handoff provisioning, database guards, and deterministic wall contracts.
+- AI Radio: 422 backend tests passed, 1 skipped; 14 frontend tests passed; the
+  production frontend build completed.
+- Voting: 364 backend tests passed with 2 skipped; 74 local-agent tests passed;
+  both managed packages compiled.
+- Juke: 285 backend tests and 9 media-agent tests passed; the backend compiled
+  after repairing its reproducible lockfile.
+- Visible Edge mouse run: 6 of 6 cards loaded with repository, protected config,
+  and health paths; Check All completed; the database two-click guard worked;
+  settings saved; zero browser console errors; all autostart switches remained
+  off.
+- Exact-value scan: none of the private handoff's credential values occur in
+  tracked source across OnAir, AI, Voting, or Juke.
+
+The verification did not start any AI, Voting, or Juke service and did not
+touch the live `/lofi` broadcast. AI speech remains intentionally blocked by
+the upstream approval gate until commissioned RadioTEDU voice references are
+supplied.
+
 ## Release limitations
 
 - The public installer is not Authenticode-signed.

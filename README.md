@@ -112,6 +112,50 @@ Use **Exact replacement** for each station library:
 
 Exact replacement deactivates only the selected station's out-of-profile tracks, removes stale pending references, leaves a currently playing song to finish, and refills that station's queue from the verified folder.
 
+### RadioTEDU service control
+
+**Settings → RadioTEDU Services** is the local control plane for the related
+RadioTEDU systems:
+
+- RadioTEDU AI Radio: Shared AI and the independent EN/FR broadcast supervisor
+- RadioTEDU Voting: local voting agent and web backend
+- RadioTEDU Juke: local media agent and web backend
+
+Each component has explicit enable and startup switches, an absolute source
+folder, a protected configuration-folder or `.env` path, health endpoints, and
+an optional database-backup folder. Every filesystem field has a native Browse
+button, so the complete setup can be performed without typing paths. The wall
+shows source readiness, Git commit
+and local-change state, managed PID state, endpoint latency, and sanitized
+health signals. Operators can check, start, stop, and restart each fixed
+component entirely with the mouse. Start, stop, restart, and database updates
+must be confirmed by a second click within 20 seconds.
+
+The control plane never accepts an arbitrary command and never reads a secret
+into browser settings. Credentials remain in the protected external
+configuration supplied by each authoritative RadioTEDU repository. Plain HTTP
+health checks are restricted to loopback; external health endpoints require
+HTTPS. Only one managed service may own a stream mount at a time, and the AI
+broadcast supervisor cannot start until Shared AI reports healthy.
+
+Database updates are offline maintenance operations. The managed service must
+be stopped first. PostgreSQL services require `pg_dump`, create a timestamped
+custom-format backup, and then run only their repository-defined migration
+scripts. The AI supervisor backs up each station-local SQLite database, applies
+its numbered migration ledger, and rescans the station music catalog. A failed
+backup blocks migration. Successful maintenance is recorded outside the
+database and displayed with database type, readiness, completion time, backup
+count, and migration count; no credential or database URL is stored there.
+
+For an authorized RadioTEDU broadcast computer,
+`tools/provision_rtmd_integrations.py` imports the private machine handoff into
+ACL-protected files under `C:\ProgramData\RadioTEDU`, pins the six service cards
+to the checked-out repositories, and leaves every autostart switch off. The
+script prints only a count and never prints credentials. Machine-specific
+`.env` files, the private handoff, databases, media, and generated secrets must
+never be added to Git. Operators can review paths and health from the dashboard
+after provisioning; secret values deliberately remain invisible.
+
 ## Windows Installer
 
 - The installer source is open source under `installer/LICENSE.md`. The app payloads and trademarks remain under their own licenses.

@@ -5,7 +5,7 @@ const AUTH_KEYS = Object.freeze({
   refresh: 'cleanroom_auth_refresh_token',
   user: 'cleanroom_auth_user',
 });
-const RADIOTEDU_LOFI_PAGE = 'https://radiotedu.com/lofi/';
+const RADIOTEDU_LOFI_PAGE = 'https://stream.radiotedu.com/lofi';
 
 const state = {
   stationId: null,
@@ -17,6 +17,8 @@ const state = {
   stationOutput: null,
   libraryWatcher: null,
   integrations: null,
+  radioteduServices: null,
+  serviceActionArmed: {},
   setupState: null,
   audioDevices: [],
   sweeper: null,
@@ -137,7 +139,10 @@ function setBusy(enabled, title = 'Working…', detail = 'Waiting for verified s
       delete button.dataset.beforeBusy;
     }
   });
-  if (!enabled) syncActionButtons();
+  if (!enabled) {
+    syncActionButtons();
+    if (state.radioteduServices) renderRadioTEDUServices();
+  }
 }
 
 function setConnection(mode, label) {
@@ -361,20 +366,29 @@ async function loadCoreStatus() {
 }
 
 async function loadOperatorConfiguration() {
-  const [setupState, devicePayload, integrations] = await Promise.all([
+  const [setupState, devicePayload, integrations, radioteduServices] = await Promise.all([
     api(`/api/setup/state?station_id=${state.stationId}`),
     api('/api/audio/devices').catch(() => ({ devices: [] })),
     api('/api/integrations/radiotedu').catch(() => ({
       voting_enabled: false,
       study_enabled: false,
     })),
+    state.radioteduServices
+      ? Promise.resolve(state.radioteduServices)
+      : api('/api/integrations/radiotedu/services?refresh_health=false').catch(() => ({
+        services: {},
+        definitions: [],
+        status: [],
+      })),
   ]);
   state.setupState = setupState || {};
   state.audioDevices = Array.isArray(devicePayload?.devices) ? devicePayload.devices : [];
   state.integrations = integrations || {};
+  state.radioteduServices = radioteduServices || { services: {}, definitions: [], status: [] };
   renderOutputConfiguration();
   renderAiConfiguration();
   renderIntegrations();
+  renderRadioTEDUServices();
   renderReadiness();
 }
 
@@ -390,6 +404,169 @@ function renderIntegrations() {
   $('votingAgentToken').placeholder = config.voting_agent_token_configured
     ? 'Saved securely — leave blank to keep'
     : 'Required when voting is enabled';
+}
+
+function serviceControlId(serviceId, field) {
+  return `service-${serviceId}-${field}`;
+}
+
+function renderRadioTEDUServices() {
+  const container = $('serviceControlCards');
+  if (!container) return;
+  const payload = state.radioteduServices || {};
+  const definitions = Array.isArray(payload.definitions) ? payload.definitions : [];
+  const signature = definitions.map((item) => item.id).join('|');
+  if (container.dataset.signature !== signature) {
+    container.dataset.signature = signature;
+    container.innerHTML = definitions.map((definition) => {
+      const mounts = Array.isArray(definition.mounts) && definition.mounts.length
+        ? ` Mounts: ${definition.mounts.join(', ')}.`
+        : '';
+      return `
+        <section class="service-control-card" data-service-card="${escapeHtml(definition.id)}" data-state="disabled">
+          <div class="service-card-head">
+            <div>
+              <div class="eyebrow">${escapeHtml(definition.product)}</div>
+              <h4>${escapeHtml(definition.name)}</h4>
+              <p>${escapeHtml(definition.description)}${escapeHtml(mounts)}</p>
+            </div>
+            <span class="mini-state service-card-state" id="${serviceControlId(definition.id, 'state')}">Loading</span>
+          </div>
+          <div class="service-switches">
+            <label class="check-row"><input id="${serviceControlId(definition.id, 'enabled')}" type="checkbox"> Enable management</label>
+            <label class="check-row"><input id="${serviceControlId(definition.id, 'autostart')}" type="checkbox"> Start with RadioTEDU OnAir</label>
+          </div>
+          <div class="service-paths">
+            <div class="service-path-picker">
+              <label>Component source folder<input id="${serviceControlId(definition.id, 'source')}" autocomplete="off" placeholder="Absolute local source path"></label>
+              <button class="button secondary" type="button" data-service-path="source" data-service-id="${escapeHtml(definition.id)}" data-picker-kind="folder">Browse</button>
+            </div>
+            <div class="service-path-picker">
+              <label>${definition.id.startsWith('rtai_') ? 'Protected configuration folder' : 'Protected .env file'}<input id="${serviceControlId(definition.id, 'config')}" autocomplete="off" placeholder="Absolute protected path"></label>
+              <button class="button secondary" type="button" data-service-path="config" data-service-id="${escapeHtml(definition.id)}" data-picker-kind="${definition.id.startsWith('rtai_') ? 'folder' : 'file'}">Browse</button>
+            </div>
+            <label class="service-health-field">Health URLs — one per line<textarea id="${serviceControlId(definition.id, 'health')}" rows="2" placeholder="Loopback HTTP or external HTTPS"></textarea></label>
+            ${definition.database_supported ? `<div class="service-backup-field service-path-picker"><label>Database backup folder<input id="${serviceControlId(definition.id, 'backup')}" autocomplete="off" placeholder="Required before database updates"></label><button class="button secondary" type="button" data-service-path="backup" data-service-id="${escapeHtml(definition.id)}" data-picker-kind="folder">Browse</button></div>` : ''}
+          </div>
+          <div class="service-health-summary" id="${serviceControlId(definition.id, 'summary')}">Save paths, then check health.</div>
+          <div class="service-actions">
+            <button class="button secondary" type="button" data-service-action="check" data-service-id="${escapeHtml(definition.id)}">Check</button>
+            <button class="button secondary" type="button" data-service-action="start" data-service-id="${escapeHtml(definition.id)}">Start</button>
+            <button class="button secondary" type="button" data-service-action="stop" data-service-id="${escapeHtml(definition.id)}">Stop</button>
+            <button class="button secondary" type="button" data-service-action="restart" data-service-id="${escapeHtml(definition.id)}">Restart</button>
+            ${definition.database_supported ? `<button class="button danger" type="button" data-service-action="update_database" data-service-id="${escapeHtml(definition.id)}">Update database</button>` : ''}
+          </div>
+        </section>`;
+    }).join('');
+    container.querySelectorAll('input, textarea').forEach((node) => {
+      node.addEventListener('input', () => { node.dataset.dirty = '1'; });
+    });
+  }
+  const configurations = payload.services || {};
+  const statuses = new Map((payload.status || []).map((item) => [item.id, item]));
+  definitions.forEach((definition) => {
+    const serviceId = definition.id;
+    const config = configurations[serviceId] || {};
+    const status = statuses.get(serviceId) || {};
+    setCleanChecked(serviceControlId(serviceId, 'enabled'), Boolean(config.enabled));
+    setCleanChecked(serviceControlId(serviceId, 'autostart'), Boolean(config.auto_start));
+    setCleanValue(serviceControlId(serviceId, 'source'), config.source_dir || '');
+    setCleanValue(serviceControlId(serviceId, 'config'), config.config_path || '');
+    setCleanValue(serviceControlId(serviceId, 'health'), (config.health_urls || []).join('\n'));
+    if ($(serviceControlId(serviceId, 'backup'))) {
+      setCleanValue(serviceControlId(serviceId, 'backup'), config.database_backup_dir || '');
+    }
+    const stateLabel = String(status.state || (config.enabled ? 'configured' : 'disabled')).replaceAll('_', ' ');
+    $(serviceControlId(serviceId, 'state')).textContent = stateLabel;
+    const card = container.querySelector(`[data-service-card="${serviceId}"]`);
+    if (card) card.dataset.state = status.state || 'disabled';
+    const health = Array.isArray(status.health) ? status.health : [];
+    const healthText = health.length
+      ? health.map((item) => {
+        const signals = item.signals && Object.keys(item.signals).length
+          ? ` — ${escapeHtml(JSON.stringify(item.signals).slice(0, 360))}`
+          : '';
+        return `${item.ok ? 'OK' : 'FAIL'} ${escapeHtml(item.url)} (${escapeHtml(item.status || 'offline')}, ${escapeHtml(item.latency_ms)} ms)${signals}`;
+      }).join('<br>')
+      : 'Health has not been checked in this view.';
+    const sourceText = status.source?.ready
+      ? `Source ready${status.source.commit ? ` at ${escapeHtml(status.source.commit)}${status.source.dirty ? ' (local changes)' : ''}` : ''}`
+      : `Source ${status.source?.configured ? 'not ready' : 'not configured'}`;
+    const mountText = Array.isArray(status.mounts) && status.mounts.length
+      ? status.mounts.join(', ')
+      : 'none';
+    const database = status.database || {};
+    const lastUpdate = database.last_update_at
+      ? new Date(database.last_update_at).toLocaleString()
+      : '';
+    const databaseText = definition.database_supported
+      ? `<br><b>Database: ${escapeHtml(database.kind || definition.database_kind || 'managed')}</b> · ${escapeHtml(String(database.state || 'not ready').replaceAll('_', ' '))} · Backups: ${database.backup_configured ? 'configured' : 'not configured'}${lastUpdate ? ` · Last update: ${escapeHtml(lastUpdate)} · ${Number((database.last_backup_files || []).length)} backup file(s)` : ''}`
+      : '';
+    $(serviceControlId(serviceId, 'summary')).innerHTML = `<b>${escapeHtml(sourceText)}</b> · Runtime: ${escapeHtml(status.runtime || 'stopped')} · Config: ${status.config_ready ? 'ready' : 'not ready'} · Mounts: ${escapeHtml(mountText)}<br>${healthText}${databaseText}`;
+    const running = status.runtime === 'running';
+    const start = card?.querySelector('[data-service-action="start"]');
+    const stop = card?.querySelector('[data-service-action="stop"]');
+    const restart = card?.querySelector('[data-service-action="restart"]');
+    if (start) start.disabled = running;
+    if (stop) stop.disabled = !running;
+    if (restart) restart.disabled = !running;
+  });
+  const active = (payload.status || []).filter((item) => item.runtime === 'running').length;
+  const unhealthy = (payload.status || []).filter((item) => item.enabled && ['degraded', 'not_ready'].includes(item.state)).length;
+  $('serviceControlState').textContent = unhealthy ? `${unhealthy} need attention` : active ? `${active} running` : 'Ready';
+}
+
+function collectRadioTEDUServiceSettings() {
+  const payload = {};
+  (state.radioteduServices?.definitions || []).forEach((definition) => {
+    const serviceId = definition.id;
+    payload[serviceId] = {
+      enabled: $(serviceControlId(serviceId, 'enabled')).checked,
+      auto_start: $(serviceControlId(serviceId, 'autostart')).checked,
+      source_dir: $(serviceControlId(serviceId, 'source')).value.trim(),
+      config_path: $(serviceControlId(serviceId, 'config')).value.trim(),
+      health_urls: $(serviceControlId(serviceId, 'health')).value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+      database_backup_dir: $(serviceControlId(serviceId, 'backup'))?.value.trim() || '',
+    };
+  });
+  return payload;
+}
+
+async function pickRadioTEDUServicePath(button) {
+  const serviceId = button.dataset.serviceId;
+  const field = button.dataset.servicePath;
+  const kind = button.dataset.pickerKind === 'file' ? 'file' : 'folder';
+  const endpoint = kind === 'file'
+    ? '/api/operator/pick-file'
+    : '/api/operator/pick-folder';
+  const input = $(serviceControlId(serviceId, field));
+  if (!serviceId || !field || !input) return;
+  setBusy(true, `Selecting ${field.replaceAll('_', ' ')}…`, 'Use the operating-system picker');
+  setResult('serviceControlResult');
+  try {
+    const result = await api(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(kind === 'file'
+        ? { initial_path: input.value.trim(), description: `Select ${serviceId} protected configuration` }
+        : { initial_folder: input.value.trim(), description: `Select ${serviceId} ${field.replaceAll('_', ' ')}` }),
+      timeoutMs: 620000,
+    });
+    const selected = kind === 'file' ? result.path : result.folder;
+    if (result.selected && selected) {
+      input.value = selected;
+      input.dataset.dirty = '1';
+      const message = `${serviceId} ${field.replaceAll('_', ' ')} selected. Save settings to verify it.`;
+      setResult('serviceControlResult', message, 'success');
+      logActivity(message);
+    }
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('serviceControlResult', message, 'error');
+    logActivity(`Path selection failed: ${message}`, 'error');
+  } finally {
+    setBusy(false);
+  }
 }
 
 function renderCoreStatus(publicStation = null) {
@@ -450,8 +627,12 @@ function renderLibraryProfile() {
   const watcherState = watcherProfile
     ? ` · auto ${watcherProfile.status || 'watching'}`
     : (folder ? ' · auto watcher pending' : '');
+  const persistedActiveFiles = Number(settings.library_active_files);
+  const activeFiles = Number.isFinite(persistedActiveFiles)
+    ? persistedActiveFiles
+    : 0;
   $('libraryProfileState').textContent = folder
-    ? `${label || 'Managed folder'} · ${managedMode === 'replace' ? 'exact replacement' : 'merge'} · ${state.libraryTotal || 0} active items${watcherState}`
+    ? `${label || 'Managed folder'} · ${managedMode === 'replace' ? 'exact replacement' : 'merge'} · ${activeFiles} active items${watcherState}`
     : 'No managed music folder has been configured for this station.';
   $('libraryManagedPath').textContent = folder || 'Choose a folder below, then sync and verify it.';
   if ($('jingleFolder') && $('jingleFolder').dataset.dirty !== '1') {
@@ -1984,6 +2165,150 @@ async function testIntegrations() {
   } finally { setBusy(false); }
 }
 
+async function saveRadioTEDUServices(event) {
+  event.preventDefault();
+  setBusy(true, 'Saving managed services…', 'Validating fixed commands, paths, and health endpoints');
+  setResult('serviceControlResult');
+  try {
+    const result = await api('/api/integrations/radiotedu/services', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ services: collectRadioTEDUServiceSettings() }),
+      idempotent: true,
+      timeoutMs: 20000,
+    });
+    state.radioteduServices = result;
+    (result.definitions || []).forEach((definition) => {
+      ['enabled', 'autostart', 'source', 'config', 'health', 'backup'].forEach((field) => {
+        const node = $(serviceControlId(definition.id, field));
+        if (node) delete node.dataset.dirty;
+      });
+    });
+    renderRadioTEDUServices();
+    const message = 'Verified: managed service settings were saved. No production service was started.';
+    setResult('serviceControlResult', message, 'success');
+    logActivity(message);
+    toast(message);
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('serviceControlResult', message, 'error');
+    logActivity(`Managed service settings failed: ${message}`, 'error');
+    toast(message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function checkAllRadioTEDUServices() {
+  setBusy(true, 'Checking RadioTEDU services…', 'Testing health, source state, and managed runtime');
+  setResult('serviceControlResult');
+  try {
+    state.radioteduServices = await api('/api/integrations/radiotedu/services?refresh_health=true', { timeoutMs: 35000 });
+    renderRadioTEDUServices();
+    const statuses = state.radioteduServices.status || [];
+    const healthy = statuses.filter((item) => item.state === 'healthy').length;
+    const enabled = statuses.filter((item) => item.enabled).length;
+    const message = `Health check complete: ${healthy} of ${enabled} enabled services are healthy. Core playout was not changed.`;
+    setResult('serviceControlResult', message, healthy === enabled ? 'success' : 'error');
+    logActivity(message, healthy === enabled ? 'success' : 'error');
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('serviceControlResult', message, 'error');
+    logActivity(`Service health check failed: ${message}`, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+function clearServiceActionArm(button) {
+  const key = `${button.dataset.serviceId}:${button.dataset.serviceAction}`;
+  delete state.serviceActionArmed[key];
+  button.classList.remove('armed');
+  button.textContent = button.dataset.originalLabel || button.textContent;
+}
+
+async function controlRadioTEDUService(button) {
+  const serviceId = button.dataset.serviceId;
+  const action = button.dataset.serviceAction;
+  if (!serviceId || !action) return;
+  if (action === 'check') {
+    setBusy(true, 'Checking service…', 'Reading health without changing runtime');
+    setResult('serviceControlResult');
+    try {
+      const result = await api(`/api/integrations/radiotedu/services/${encodeURIComponent(serviceId)}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'check', confirmation: '' }),
+        timeoutMs: 20000,
+      });
+      state.radioteduServices.status = result.status || [];
+      renderRadioTEDUServices();
+      const service = result.service || {};
+      const message = `${service.name || serviceId}: ${String(service.state || 'checked').replaceAll('_', ' ')}. Runtime was not changed.`;
+      setResult('serviceControlResult', message, service.state === 'healthy' || service.state === 'disabled' ? 'success' : 'error');
+      logActivity(message);
+    } catch (error) {
+      const message = errorMessage(error);
+      setResult('serviceControlResult', message, 'error');
+      logActivity(`Service check failed: ${message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
+  const confirmations = {
+    start: 'START SERVICE',
+    stop: 'STOP SERVICE',
+    restart: 'RESTART SERVICE',
+    update_database: 'UPDATE DATABASE',
+  };
+  const key = `${serviceId}:${action}`;
+  const now = Date.now();
+  if (!state.serviceActionArmed[key] || state.serviceActionArmed[key] < now) {
+    Object.keys(state.serviceActionArmed).forEach((armedKey) => { delete state.serviceActionArmed[armedKey]; });
+    document.querySelectorAll('[data-service-action].armed').forEach(clearServiceActionArm);
+    state.serviceActionArmed[key] = now + 20000;
+    button.dataset.originalLabel = button.textContent;
+    button.classList.add('armed');
+    button.textContent = `Confirm ${button.textContent}`;
+    setResult('serviceControlResult', `Click “${button.textContent}” again within 20 seconds.`, 'error');
+    window.setTimeout(() => {
+      if ((state.serviceActionArmed[key] || 0) <= Date.now()) clearServiceActionArm(button);
+    }, 20500);
+    return;
+  }
+  clearServiceActionArm(button);
+  setBusy(true, `${action.replaceAll('_', ' ')}…`, `Executing fixed ${serviceId} control`);
+  setResult('serviceControlResult');
+  try {
+    const result = await api(`/api/integrations/radiotedu/services/${encodeURIComponent(serviceId)}/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, confirmation: confirmations[action] }),
+      timeoutMs: action === 'update_database' ? 900000 : 60000,
+      idempotent: action !== 'update_database',
+    });
+    state.radioteduServices.status = result.status || [];
+    renderRadioTEDUServices();
+    const maintenance = action === 'update_database'
+      ? result.backup_file
+        ? ` Backup: ${result.backup_file}. ${Number(result.migrations_applied || 0)} migration task(s) applied.`
+        : ` ${Array.isArray(result.stations) ? result.stations.length : 0} station database(s) backed up and updated.`
+      : '';
+    const message = `Verified: ${serviceId} ${action.replaceAll('_', ' ')} completed.${maintenance}`;
+    setResult('serviceControlResult', message, 'success');
+    logActivity(message);
+    toast(message);
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('serviceControlResult', message, 'error');
+    logActivity(`${serviceId} ${action} failed: ${message}`, 'error');
+    toast(message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function publishVotingRound() {
   const candidates = state.queue
     .filter((item) => !item.is_played && String(item.status || '').toLowerCase() !== 'done')
@@ -2075,6 +2400,8 @@ function bindEvents() {
   $('integrationForm').addEventListener('submit', saveIntegrations);
   $('testIntegrationsButton').addEventListener('click', testIntegrations);
   $('publishVotingRoundButton').addEventListener('click', publishVotingRound);
+  $('serviceControlForm').addEventListener('submit', saveRadioTEDUServices);
+  $('checkAllServicesButton').addEventListener('click', checkAllRadioTEDUServices);
   $('refreshReadinessButton').addEventListener('click', refreshReadiness);
   $('repairDependenciesButton').addEventListener('click', repairDependencies);
   $('passwordForm').addEventListener('submit', changePassword);
@@ -2113,6 +2440,10 @@ function bindEvents() {
     if (add) addTrackToQueue(Number(add.dataset.addTrack));
     const queueButton = event.target.closest('[data-queue-action]');
     if (queueButton) queueAction(queueButton.dataset.queueAction, Number(queueButton.dataset.index));
+    const serviceButton = event.target.closest('[data-service-action]');
+    if (serviceButton) controlRadioTEDUService(serviceButton);
+    const servicePathButton = event.target.closest('[data-service-path]');
+    if (servicePathButton) pickRadioTEDUServicePath(servicePathButton);
   });
 }
 

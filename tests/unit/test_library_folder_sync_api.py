@@ -85,6 +85,7 @@ def test_replace_sync_is_exact_idempotent_and_cleans_pending_queue(
     assert Path(settings["music_library_folder"]).resolve() == managed.resolve()
     assert settings["library_management_mode"] == "replace"
     assert settings["library_profile_label"] == "Pop"
+    assert settings["library_active_files"] == "2"
 
     second_response = client.post("/api/library/folder/sync", json=payload)
     assert second_response.status_code == 200, second_response.text
@@ -194,8 +195,10 @@ def test_jingle_folder_profile_does_not_overwrite_music_profile(
 
     assert settings["library_profile_label"] == "Pop"
     assert settings["library_management_mode"] == "replace"
+    assert settings["library_active_files"] == "1"
     assert settings["jingle_library_profile_label"] == "Jingles"
     assert settings["jingle_library_management_mode"] == "replace"
+    assert settings["jingle_library_active_files"] == "1"
     assert Path(settings["jingle_library_folder"]).resolve() == jingle_folder.resolve()
     assert {str(row["track_type"]): int(row["count"]) for row in rows} == {
         "jingle": 1,

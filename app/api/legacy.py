@@ -303,6 +303,11 @@ class FolderPickerPayload(BaseModel):
     description: str = "Select a radio media folder"
 
 
+class FilePickerPayload(BaseModel):
+    initial_path: str = ""
+    description: str = "Select a protected configuration file"
+
+
 class SweeperConfigPayload(BaseModel):
     station_id: int = 1
     enabled: bool = False
@@ -3604,6 +3609,82 @@ def pick_operator_folder(payload: FolderPickerPayload):
         raise HTTPException(status_code=503, detail=f"folder picker unavailable: {exc}") from exc
 
 
+@router.post("/api/operator/pick-file")
+def pick_operator_file(payload: FilePickerPayload):
+    """Open the operating system file chooser for a local desktop operator."""
+    initial = str(payload.initial_path or "").strip().strip('"')
+    description = str(
+        payload.description or "Select a protected configuration file"
+    ).strip()
+    initial_path = Path(initial).expanduser() if initial else None
+    if os.name == "nt":
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$d=New-Object System.Windows.Forms.OpenFileDialog;"
+            "$d.Title=$env:RADIO_WALL_PICKER_DESCRIPTION;"
+            "$d.Filter='Environment files (*.env)|*.env|All files (*.*)|*.*';"
+            "$d.CheckFileExists=$true;"
+            "$d.Multiselect=$false;"
+            "if($env:RADIO_WALL_PICKER_INITIAL){"
+            "$p=$env:RADIO_WALL_PICKER_INITIAL;"
+            "if(Test-Path -LiteralPath $p -PathType Leaf){"
+            "$d.InitialDirectory=[System.IO.Path]::GetDirectoryName($p);"
+            "$d.FileName=[System.IO.Path]::GetFileName($p)"
+            "}elseif(Test-Path -LiteralPath $p -PathType Container){"
+            "$d.InitialDirectory=$p}};"
+            "$r=$d.ShowDialog();"
+            "if($r -eq [System.Windows.Forms.DialogResult]::OK){"
+            "[Console]::Out.Write($d.FileName)}"
+        )
+        env = os.environ.copy()
+        env["RADIO_WALL_PICKER_INITIAL"] = initial
+        env["RADIO_WALL_PICKER_DESCRIPTION"] = description
+        try:
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=408, detail="file picker timed out") from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"file picker unavailable: {exc}"
+            ) from exc
+        selected = str(completed.stdout or "").strip()
+        if completed.returncode not in {0, None} and not selected:
+            detail = str(completed.stderr or "file picker failed").strip()
+            raise HTTPException(status_code=503, detail=detail[:500])
+        return {"ok": True, "selected": bool(selected), "path": selected}
+
+    try:
+        import tkinter
+        from tkinter import filedialog
+
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askopenfilename(
+            initialdir=(
+                str(initial_path.parent)
+                if initial_path and initial_path.is_file()
+                else initial or None
+            ),
+            title=description,
+            filetypes=(
+                ("Environment files", "*.env"),
+                ("All files", "*.*"),
+            ),
+        )
+        root.destroy()
+        return {"ok": True, "selected": bool(selected), "path": str(selected or "")}
+    except Exception as exc:  # noqa: BLE001 - platform UI availability varies
+        raise HTTPException(status_code=503, detail=f"file picker unavailable: {exc}") from exc
+
+
 def _reindex_pending_queue(conn, station_id: int) -> None:
     rows = conn.execute(
         "SELECT id FROM queue_items WHERE station_id=? AND status='pending' "
@@ -3853,6 +3934,10 @@ def sync_station_library_folder(payload: LibraryFolderSyncPayload):
                 "active_files": len(active_paths),
             },
         )
+    SettingsRepository(conn).upsert_station(
+        sid,
+        {f"{prefix}_active_files": str(len(active_paths))},
+    )
 
     return {
         "ok": True,

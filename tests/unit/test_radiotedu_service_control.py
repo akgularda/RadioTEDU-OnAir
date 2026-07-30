@@ -1,0 +1,355 @@
+import base64
+import hashlib
+import hmac
+import shutil
+from pathlib import Path
+
+import pytest
+from fastapi import HTTPException
+
+import app.api.integrations as integrations
+import app.services.radiotedu_service_control as control
+from app.api.integrations import (
+    RadioTEDUServiceAction,
+    RadioTEDUServiceSettingsUpdate,
+)
+
+
+def _settings(tmp_path: Path):
+    values = control.default_settings()
+    return values
+
+
+def test_settings_allow_only_fixed_services_safe_health_and_absolute_paths(
+    tmp_path,
+):
+    values = _settings(tmp_path)
+    assert values["voting_backend"]["health_urls"] == [
+        "https://radiotedu.com/jukebox/api/v1/next-song-voting/status",
+        "https://radiotedu.com/jukebox/api/v1/next-song-voting/rounds/active",
+    ]
+    assert values["juke_backend"]["health_urls"] == [
+        "https://radiotedu.com/juke-local"
+    ]
+    values["juke_media_agent"].update(
+        {
+            "enabled": True,
+            "source_dir": str(tmp_path / "agent"),
+            "config_path": str(tmp_path / "agent.env"),
+            "health_urls": ["http://127.0.0.1:3210/v1/health"],
+            "command": "this field must never be accepted",
+        }
+    )
+
+    normalized = control.normalize_settings(values)
+
+    assert "command" not in normalized["juke_media_agent"]
+    assert normalized["juke_media_agent"]["source_dir"] == str(
+        (tmp_path / "agent").resolve()
+    )
+    values["juke_media_agent"]["health_urls"] = [
+        "http://radio.example/health"
+    ]
+    with pytest.raises(HTTPException) as exc:
+        control.normalize_settings(values)
+    assert exc.value.detail == "non_loopback_health_url_requires_https"
+
+
+def test_mutations_require_exact_confirmation_and_mounts_are_single_owner(
+    tmp_path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    settings["voting_agent"]["enabled"] = True
+
+    with pytest.raises(HTTPException) as exc:
+        control.perform_action(
+            "voting_agent",
+            "start",
+            "yes",
+            settings,
+        )
+    assert exc.value.detail == "confirmation_required"
+
+    monkeypatch.setattr(
+        control,
+        "_tracked_process",
+        lambda service_id: (
+            ("running", 99)
+            if service_id == "rtai_supervisor"
+            else ("stopped", None)
+        ),
+    )
+    assert (
+        control._mount_conflict("voting_agent", settings)
+        == "rtai_supervisor"
+    )
+
+
+def test_service_settings_api_persists_only_non_secret_control_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    values = _settings(tmp_path)
+    values["voting_backend"].update(
+        {
+            "source_dir": str(tmp_path / "voting-backend"),
+            "config_path": str(tmp_path / "voting-backend.env"),
+            "database_backup_dir": str(tmp_path / "backups"),
+        }
+    )
+
+    result = integrations.update_radiotedu_services(
+        RadioTEDUServiceSettingsUpdate(services=values),
+        _user={},
+    )
+    loaded = integrations.get_radiotedu_services(
+        refresh_health=False,
+        _user={},
+    )
+
+    assert result["ok"] is True
+    assert loaded["services"]["voting_backend"]["config_path"].endswith(
+        "voting-backend.env"
+    )
+    assert "token" not in str(loaded).lower()
+    assert "password" not in str(loaded).lower()
+
+
+def test_database_action_is_never_available_for_agents(tmp_path):
+    settings = _settings(tmp_path)
+    with pytest.raises(HTTPException) as exc:
+        control.perform_action(
+            "juke_media_agent",
+            "update_database",
+            "UPDATE DATABASE",
+            settings,
+        )
+    assert exc.value.detail == "database_update_not_supported"
+
+
+def test_postgres_database_update_creates_backup_and_persists_health_history(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DATA_ROOT", str(tmp_path / "onair-data"))
+    source = tmp_path / "voting-backend"
+    (source / "dist").mkdir(parents=True)
+    (source / "dist" / "server.js").write_text("", encoding="utf-8")
+    (source / "package.json").write_text("{}", encoding="utf-8")
+    env_file = tmp_path / "voting.env"
+    env_file.write_text(
+        "DATABASE_URL=postgres://radio:private@127.0.0.1:5432/radiotedu\n",
+        encoding="utf-8",
+    )
+    backup_dir = tmp_path / "backups"
+    settings = _settings(tmp_path)
+    settings["voting_backend"].update(
+        {
+            "enabled": True,
+            "source_dir": str(source),
+            "config_path": str(env_file),
+            "health_urls": [],
+            "database_backup_dir": str(backup_dir),
+        }
+    )
+    settings = control.normalize_settings(settings)
+    commands = []
+
+    monkeypatch.setattr(
+        control.shutil,
+        "which",
+        lambda name: str(tmp_path / name),
+    )
+    monkeypatch.setattr(
+        control,
+        "_tracked_process",
+        lambda _service_id: ("stopped", None),
+    )
+
+    def fake_run_quiet(command, **_kwargs):
+        commands.append(command)
+        if "--file" in command:
+            Path(command[command.index("--file") + 1]).write_bytes(b"backup")
+
+    monkeypatch.setattr(control, "_run_quiet", fake_run_quiet)
+
+    result = control.perform_action(
+        "voting_backend",
+        "update_database",
+        "UPDATE DATABASE",
+        settings,
+    )
+    status = control.service_status(
+        "voting_backend",
+        settings,
+        include_health=False,
+    )
+
+    assert result["ok"] is True
+    assert result["migrations_applied"] == 2
+    assert Path(result["backup_file"]).read_bytes() == b"backup"
+    assert [command[-2:] for command in commands[1:]] == [
+        ["run", "db:migrate"],
+        ["run", "db:migrate:voting-agent"],
+    ]
+    assert status["database"]["state"] == "updated"
+    assert status["database"]["kind"] == "PostgreSQL"
+    assert status["database"]["migrations_applied"] == 2
+    assert status["database"]["last_backup_files"] == [result["backup_file"]]
+    assert "private" not in str(status)
+
+
+def test_juke_ai_mirror_participates_in_mount_ownership(tmp_path):
+    env_file = tmp_path / "juke-agent.env"
+    env_file.write_text("AI_MIRROR_ENABLED=true\n", encoding="utf-8")
+    settings = _settings(tmp_path)
+    settings["juke_media_agent"]["config_path"] = str(env_file)
+
+    assert control._service_mounts(
+        "juke_media_agent",
+        settings["juke_media_agent"],
+    ) == ["/ai"]
+
+
+def test_disabled_services_do_not_delay_check_all(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(
+        control,
+        "_health_check",
+        lambda _url: pytest.fail("disabled health URL was requested"),
+    )
+
+    status = control.service_status(
+        "rtai_shared_ai",
+        settings,
+        include_health=True,
+    )
+
+    assert status["state"] == "disabled"
+    assert status["health"] == []
+
+
+def test_juke_health_headers_are_signed_without_exposing_the_secret(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "media-agent.env"
+    config_path.write_text(
+        "MEDIA_AGENT_REQUEST_SECRET=local-test-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(control.time, "time", lambda: 1_700_000_000)
+
+    headers = control._juke_health_headers(
+        "http://127.0.0.1:3210/v1/health?brief=1",
+        {"config_path": str(config_path)},
+    )
+
+    message = b"GET\n/v1/health?brief=1\n1700000000\n"
+    expected = base64.urlsafe_b64encode(
+        hmac.new(
+            b"local-test-secret",
+            message,
+            hashlib.sha256,
+        ).digest()
+    ).decode().rstrip("=")
+    assert headers == {
+        "X-Juke-Timestamp": "1700000000",
+        "X-Juke-Signature": expected,
+    }
+    assert "local-test-secret" not in str(headers)
+
+
+def test_rtai_command_prefers_repository_virtualenv_python(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "rtai"
+    repository_python = source / ".venv" / "Scripts" / "python.exe"
+    repository_python.parent.mkdir(parents=True)
+    repository_python.write_bytes(b"")
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    monkeypatch.setattr(
+        control.shutil,
+        "which",
+        lambda command: (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if command == "powershell.exe"
+            else None
+        ),
+    )
+    settings = _settings(tmp_path)
+    settings["rtai_shared_ai"].update(
+        {
+            "source_dir": str(source),
+            "config_path": str(config_root),
+        }
+    )
+
+    command, working_directory = control._build_command(
+        "rtai_shared_ai",
+        settings["rtai_shared_ai"],
+    )
+
+    assert command[command.index("-Python") + 1] == str(repository_python)
+    assert working_directory == source
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required")
+def test_fixed_node_service_can_be_started_and_stopped(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLEANROOM_DATA_ROOT", str(tmp_path / "onair-data"))
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "package.json").write_text(
+        '{"name":"radiotedu-control-test","private":true}',
+        encoding="utf-8",
+    )
+    (source / "server.js").write_text(
+        "setInterval(() => {}, 1000);",
+        encoding="utf-8",
+    )
+    env_file = tmp_path / "agent.env"
+    env_file.write_text("TEST_MODE=true\n", encoding="utf-8")
+    settings = _settings(tmp_path)
+    settings["juke_media_agent"].update(
+        {
+            "enabled": True,
+            "source_dir": str(source),
+            "config_path": str(env_file),
+            "health_urls": [],
+        }
+    )
+    settings = control.normalize_settings(settings)
+
+    started = control.perform_action(
+        "juke_media_agent",
+        "start",
+        "START SERVICE",
+        settings,
+    )
+    try:
+        assert started["ok"] is True
+        assert control.service_status(
+            "juke_media_agent",
+            settings,
+            include_health=False,
+        )["runtime"] == "running"
+    finally:
+        stopped = control.perform_action(
+            "juke_media_agent",
+            "stop",
+            "STOP SERVICE",
+            settings,
+        )
+    assert stopped["ok"] is True
+
+
+def test_api_action_uses_backend_confirmation_guard(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    with pytest.raises(HTTPException) as exc:
+        integrations.control_radiotedu_service(
+            "voting_agent",
+            RadioTEDUServiceAction(action="start", confirmation=""),
+            _user={},
+        )
+    assert exc.value.detail == "confirmation_required"

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#101114">
   <meta name="description" content="Deterministic RTAI automation wall for any radio station">
   <title>RadioTEDU OnAir</title>
-  <link rel="stylesheet" href="/static/deterministic-wall/styles.css?v=6">
+  <link rel="stylesheet" href="/static/deterministic-wall/styles.css?v=9">
 </head>
 <body>
   <div id="authGate" class="auth-gate" hidden>
@@ -272,7 +272,7 @@
 
         <article class="panel configuration-panel">
           <div class="panel-heading">
-            <div><div class="eyebrow">RADIOTEDU SERVICES</div><h2>Voting and Study adapters</h2></div>
+            <div><div class="eyebrow">RADIOTEDU SERVICES</div><h2>Adapters and managed services</h2></div>
             <div id="integrationState" class="mini-state">Loading</div>
           </div>
           <p class="card-copy">These adapters are optional. If RadioTEDU services are unavailable, music, schedules, microphone, and streaming continue normally.</p>
@@ -292,6 +292,21 @@
             </div>
           </form>
           <p id="integrationResult" class="action-result" aria-live="polite"></p>
+          <div class="service-control-heading">
+            <div>
+              <h3>Service control and database health</h3>
+              <p>Manage fixed RadioTEDU components without exposing credentials. Environment files stay outside this app and are never displayed.</p>
+            </div>
+            <div class="service-control-heading-actions">
+              <span id="serviceControlState" class="mini-state">Loading</span>
+              <button id="checkAllServicesButton" class="button secondary" type="button">Check all health</button>
+            </div>
+          </div>
+          <form id="serviceControlForm" class="operator-form">
+            <div id="serviceControlCards" class="service-control-cards" aria-live="polite"></div>
+            <button id="saveServiceControlButton" class="button primary" type="submit">Save managed service settings</button>
+          </form>
+          <p id="serviceControlResult" class="action-result" aria-live="polite"></p>
         </article>
 
         <article class="panel configuration-panel readiness-panel">
@@ -396,6 +411,6 @@
 
   <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><span class="spinner"></span><b id="busyTitle">Working…</b><small id="busyDetail">Waiting for verified state</small></div></div>
   <div id="toastRegion" class="toast-region" aria-live="assertive"></div>
-    <script src="/static/deterministic-wall/app.js?v=10" defer></script>
+    <script src="/static/deterministic-wall/app.js?v=16" defer></script>
 </body>
 </html>

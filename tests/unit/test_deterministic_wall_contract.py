@@ -58,5 +58,11 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "'sweeperEnabled', 'sweeperInterval', 'sweeperMode'" in javascript
     assert "setCleanChecked('sweeperEnabled'" in javascript
     assert "setCleanValue('sweeperMode'" in javascript
+    assert "settings.library_active_files" in javascript
+    assert "serviceControlState" in javascript
+    assert "https://stream.radiotedu.com/lofi" in javascript
+    assert "/api/operator/pick-file" in javascript
+    assert "data-service-path=" in javascript
+    assert "database.last_update_at" in javascript
     assert "Stop stream — keep playlist" in (WALL / "index.html").read_text(encoding="utf-8")
     assert "AI is content-only" in (WALL / "index.html").read_text(encoding="utf-8")

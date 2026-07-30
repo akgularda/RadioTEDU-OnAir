@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -14,6 +15,15 @@ from app.repositories.settings_repo import SettingsRepository
 from app.security.credential_vault import (
     resolve_credential_value,
     store_system_secret,
+)
+from app.services.radiotedu_service_control import (
+    SETTINGS_KEY as SERVICE_CONTROL_SETTINGS_KEY,
+    all_service_statuses,
+    load_settings as load_service_control_settings,
+    normalize_settings as normalize_service_control_settings,
+    perform_action as perform_service_control_action,
+    public_settings as public_service_control_settings,
+    settings_json as service_control_settings_json,
 )
 
 router = APIRouter()
@@ -45,6 +55,15 @@ class PublishVotingRoundPayload(BaseModel):
 
 class ResolveVotingRoundPayload(BaseModel):
     round_id: str = Field(min_length=1, max_length=120)
+
+
+class RadioTEDUServiceSettingsUpdate(BaseModel):
+    services: dict[str, dict[str, Any]]
+
+
+class RadioTEDUServiceAction(BaseModel):
+    action: str = Field(min_length=1, max_length=40)
+    confirmation: str = Field(default="", max_length=80)
 
 
 def _truthy(raw, default: bool = False) -> bool:
@@ -167,6 +186,19 @@ def _load_settings() -> tuple[dict, str]:
     return settings, token
 
 
+def _load_service_control_settings() -> dict[str, dict[str, Any]]:
+    init_db()
+    conn = get_connection()
+    try:
+        raw = SettingsRepository(conn).get_system().get(
+            SERVICE_CONTROL_SETTINGS_KEY,
+            "",
+        )
+    finally:
+        conn.close()
+    return load_service_control_settings(raw)
+
+
 @router.get("/api/integrations/radiotedu")
 def get_radiotedu_integrations(
     _user=Depends(require_any_permission("stations.view", "stations.edit")),
@@ -273,6 +305,68 @@ def radiotedu_integration_status(
         "core_playout_affected": False,
     }
     return {"voting": voting, "study": study}
+
+
+@router.get("/api/integrations/radiotedu/services")
+def get_radiotedu_services(
+    refresh_health: bool = True,
+    _user=Depends(require_any_permission("stations.view", "stations.edit")),
+):
+    settings = _load_service_control_settings()
+    return {
+        **public_service_control_settings(settings),
+        "status": all_service_statuses(
+            settings,
+            include_health=bool(refresh_health),
+        ),
+    }
+
+
+@router.put("/api/integrations/radiotedu/services")
+def update_radiotedu_services(
+    payload: RadioTEDUServiceSettingsUpdate,
+    _user=Depends(require_permission("stations.edit")),
+):
+    settings = normalize_service_control_settings(payload.services)
+    init_db()
+    conn = get_connection()
+    try:
+        SettingsRepository(conn).upsert_system(
+            {
+                SERVICE_CONTROL_SETTINGS_KEY: service_control_settings_json(
+                    settings
+                )
+            }
+        )
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        **public_service_control_settings(settings),
+        "status": all_service_statuses(settings, include_health=False),
+    }
+
+
+@router.post("/api/integrations/radiotedu/services/{service_id}/action")
+def control_radiotedu_service(
+    service_id: str,
+    payload: RadioTEDUServiceAction,
+    _user=Depends(require_permission("stations.edit")),
+):
+    settings = _load_service_control_settings()
+    result = perform_service_control_action(
+        service_id,
+        payload.action,
+        payload.confirmation,
+        settings,
+    )
+    return {
+        **result,
+        "status": all_service_statuses(
+            settings,
+            include_health=payload.action == "check",
+        ),
+    }
 
 
 @router.post("/api/integrations/radiotedu/voting/rounds")

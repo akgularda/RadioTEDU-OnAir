@@ -192,6 +192,25 @@ async def lifespan(_app: FastAPI):
         summary = reconcile_all_startup(conn)
         if any(int(v) > 0 for v in summary.values()):
             logger.info("Startup reconcile applied: %s", summary)
+        try:
+            from app.services.radiotedu_service_control import (
+                SETTINGS_KEY as RADIOTEDU_SERVICE_SETTINGS_KEY,
+                auto_start_enabled,
+                load_settings as load_radiotedu_service_settings,
+            )
+
+            system_settings = SettingsRepository(conn).get_system()
+            service_settings = load_radiotedu_service_settings(
+                system_settings.get(RADIOTEDU_SERVICE_SETTINGS_KEY, "")
+            )
+            started_services = auto_start_enabled(service_settings)
+            if started_services:
+                logger.info(
+                    "RadioTEDU managed services auto-started: %s",
+                    ", ".join(started_services),
+                )
+        except Exception as exc:
+            logger.warning("RadioTEDU managed service auto-start failed: %s", exc)
         from app.api.runtime import runtime_registry, worker_loop_manager
 
         shutdown_runtime_registry = runtime_registry
