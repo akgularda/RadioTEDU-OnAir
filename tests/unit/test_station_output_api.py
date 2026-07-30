@@ -33,6 +33,7 @@ def test_station_output_can_be_read_back():
         "icecast_mount": "/station12",
         "icecast_user": "source",
         "icecast_password": "hackme",
+        "icecast_tls_enabled": True,
         "output_gain_db": -2.5,
         "stream_codec_profile": "mp3_128",
         "stream_bitrate_kbps": 128,
@@ -50,6 +51,7 @@ def test_station_output_can_be_read_back():
     assert data["icecast_mount"] == "/station12"
     assert data["stream_codec_profile"] == "mp3_128"
     assert data["stream_bitrate_kbps"] == 128
+    assert data["icecast_tls_enabled"] is True
 
 
 def test_station_output_read_defaults_to_speaker_mode_when_missing():

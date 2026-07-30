@@ -59,9 +59,12 @@ def resolve_binary_details(executable_name: str) -> dict[str, str | bool]:
 def get_data_dir() -> Path:
     """Get the data directory path."""
     try:
-        from app.config import get_data_root
+        from app.config import get_db_path
 
-        return get_data_root()
+        # Runtime sidecars must follow the selected database instance. This
+        # keeps development, tests, and parallel commissioned instances from
+        # sharing process ledgers or music-history state.
+        return get_db_path().parent
     except Exception:
         if getattr(sys, "frozen", False):
             program_data = os.getenv("PROGRAMDATA", "").strip()

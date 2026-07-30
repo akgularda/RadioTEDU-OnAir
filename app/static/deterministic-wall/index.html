@@ -103,7 +103,7 @@
             <button id="startBroadcastButton" class="button success" type="button" disabled>Start / resume broadcast</button>
             <button id="stopBroadcastButton" class="button danger" type="button" disabled>Stop stream — keep playlist</button>
           </div>
-          <label class="check-row"><input id="broadcastAutostartEnabled" type="checkbox"> After I press Start, resume this station automatically when the app restarts</label>
+          <label class="check-row"><input id="broadcastAutostartEnabled" type="checkbox"> Resume this station automatically when the app restarts</label>
           <small>Stopping never clears or advances the playlist. The interrupted item stays in place and restarts from its beginning when you resume.</small>
           <p id="broadcastResult" class="action-result" aria-live="polite"></p>
         </article>
@@ -234,6 +234,7 @@
             <div class="library-sync-options">
               <label class="check-row"><input id="libraryRecursive" type="checkbox" checked> Include subfolders</label>
               <label class="check-row"><input id="libraryReplaceOutside" type="checkbox" checked> Exact replacement: deactivate this station's music outside the folder and remove it from the pending queue</label>
+              <label class="check-row"><input id="librarySkipUnplayable" type="checkbox"> Skip unreadable files and list them in the verified result instead of rejecting the entire folder</label>
             </div>
             <div class="button-row">
               <button id="syncLibraryButton" class="button primary" type="submit">Sync folder and verify station library</button>
@@ -264,6 +265,7 @@
               <label>Source user<input id="currentIcecastUser" required></label>
               <label>Source password<input id="currentIcecastPassword" type="password" autocomplete="new-password"></label>
               <label>Codec<select id="currentIcecastProfile"><option value="aac_plus_196">AAC+ 196 kbps</option><option value="mp3_128">MP3 128 kbps</option></select></label>
+              <label class="switch-row"><span><b>TLS encryption</b><small>Required for secure source ports such as 443</small></span><input id="currentIcecastTlsEnabled" type="checkbox"></label>
             </div>
             <label class="switch-row"><span><b>Local monitor</b><small>Also play this station through a selected local audio device</small></span><input id="currentLocalEnabled" type="checkbox"></label>
             <label id="currentDeviceLabel">Monitor device<select id="currentOutputDevice"><option value="">Choose an output device</option></select></label>
@@ -447,6 +449,6 @@
 
   <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><span class="spinner"></span><b id="busyTitle">Working…</b><small id="busyDetail">Waiting for verified state</small></div></div>
   <div id="toastRegion" class="toast-region" aria-live="assertive"></div>
-    <script src="/static/deterministic-wall/app.js?v=17" defer></script>
+    <script src="/static/deterministic-wall/app.js?v=24" defer></script>
 </body>
 </html>

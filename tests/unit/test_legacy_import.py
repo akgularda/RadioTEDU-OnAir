@@ -2,7 +2,18 @@ import json
 import sqlite3
 from pathlib import Path
 
-from app.migration.legacy_import import import_legacy_database
+from app.migration.legacy_import import (
+    _normalize_track_type,
+    _parse_bool,
+    import_legacy_database,
+)
+
+
+def test_legacy_normalizers_preserve_numeric_false_and_announcement_type():
+    assert _parse_bool(0, True) is False
+    assert _parse_bool("0", True) is False
+    assert _parse_bool(None, True) is True
+    assert _normalize_track_type("announcement") == "announcement"
 from app.repositories.station_output_repo import StationOutputRepository
 
 

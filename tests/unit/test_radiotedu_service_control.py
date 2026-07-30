@@ -441,6 +441,26 @@ def test_fixed_node_service_can_be_started_and_stopped(tmp_path, monkeypatch):
     assert stopped["ok"] is True
 
 
+def test_in_memory_process_registry_is_scoped_to_data_root(tmp_path, monkeypatch):
+    class RunningProcess:
+        pid = 43210
+
+        @staticmethod
+        def poll():
+            return None
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(first_root / "cleanroom.db"))
+    first_key = control._process_registry_key("juke_media_agent")
+    control._PROCESSES[first_key] = RunningProcess()
+    try:
+        monkeypatch.setenv("CLEANROOM_DB_PATH", str(second_root / "cleanroom.db"))
+        assert control._tracked_process("juke_media_agent") == ("stopped", None)
+    finally:
+        control._PROCESSES.pop(first_key, None)
+
+
 def test_api_action_uses_backend_confirmation_guard(tmp_path, monkeypatch):
     monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
     with pytest.raises(HTTPException) as exc:

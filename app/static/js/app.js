@@ -8700,6 +8700,10 @@ async function loadRuntimeInfo() {
             : !!data.speaker_monitor_enabled;
         container.innerHTML = `
             <div class="settings-row"><span class="label">Station</span><span class="value">${data.station_name || _currentStationName()}</span></div>
+            <div class="settings-row"><span class="label">System Reliability</span><span class="value">${escapeHtml(String(data.overall_state || 'unknown').toUpperCase())}</span></div>
+            <div class="settings-row"><span class="label">Database Integrity</span><span class="value">${escapeHtml(String(data.database?.integrity || 'unknown'))}</span></div>
+            <div class="settings-row"><span class="label">Database Durability</span><span class="value">${escapeHtml(String(data.database?.journal_mode || 'unknown').toUpperCase())} / ${escapeHtml(String(data.database?.synchronous || 'unknown').toUpperCase())}</span></div>
+            <div class="settings-row"><span class="label">Storage Free</span><span class="value">${Number(data.database?.disk_free_percent || 0).toFixed(1)}%</span></div>
             <div class="settings-row"><span class="label">Active Broadcast Station</span><span class="value">${data.active_station_id ?? '-'}</span></div>
             <div class="settings-row"><span class="label">Playback Output</span><span class="value">${outputMode === 'icecast' ? 'Icecast' : 'Speaker (Local)'}</span></div>
             <div class="settings-row"><span class="label">Speaker Monitor</span><span class="value">${speakerMonitor ? 'Enabled' : 'Disabled'}</span></div>

@@ -27,6 +27,8 @@ def _ensure_server() -> subprocess.Popen | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         for line in _server_proc.stdout:
             line = line.strip()

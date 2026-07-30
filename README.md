@@ -209,6 +209,18 @@ Operator documentation:
 - `docs/CONFIGURATION_REFERENCE.md`
 - `docs/TEST_REPORT.md`
 
+Commissioning and read-only media verification:
+
+```powershell
+python tools/audit_wall_migration.py --source-db C:\path\to\wall.db --target-db C:\path\to\onair.db
+python tools/validate_active_media.py --db C:\path\to\onair.db --report C:\path\to\active-media-report.json --workers 4
+```
+
+The migration audit checks stations, track groups, missing active files, and
+output/mount settings. The media validator opens every unique active audio file
+with the managed media probe and writes a machine-readable report without
+changing the station database.
+
 Screenshots should be attached under the release notes when available:
 
 - First-run setup wizard

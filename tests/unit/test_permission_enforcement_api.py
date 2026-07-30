@@ -1,4 +1,5 @@
 from app.auth.password import hash_password
+from app.config import get_db_path
 from app.db import get_connection, init_db
 from app.repositories.rbac_repo import RbacRepository
 from app.repositories.user_repo import UserRepository
@@ -152,12 +153,25 @@ def test_user_with_stations_delete_permission_can_delete_station(client):
     )
     assert created.status_code == 200, created.text
     station_id = int(created.json()["id"])
+    station_uploads = get_db_path().parent / "uploads" / f"station-{station_id}"
+    station_downloads = get_db_path().parent / "downloads" / f"station-{station_id}"
+    station_uploads.mkdir(parents=True)
+    station_downloads.mkdir(parents=True)
+    (station_uploads / "test-jingle.mp3").write_bytes(b"temporary")
+    (station_downloads / "test-track.mp3").write_bytes(b"temporary")
 
     headers = _login_headers(client, "station-deleter-perm", "pass-1234")
     response = client.delete(f"/api/stations/{station_id}", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["deleted_station_id"] == station_id
+    assert response.json()["media_cleanup"] == {
+        "ok": True,
+        "removed": ["uploads", "downloads"],
+        "errors": [],
+    }
+    assert not station_uploads.exists()
+    assert not station_downloads.exists()
 
 
 def test_stations_create_permission_cannot_delete_station(client):

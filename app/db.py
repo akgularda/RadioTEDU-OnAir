@@ -1,5 +1,6 @@
 import os
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -9,6 +10,8 @@ from app.auth.permissions import GLOBAL_PERMISSION_KEYS, SHOW_PERMISSION_KEYS
 
 _SCHEMA_VERSION = 12
 _INIT_LOCK = threading.Lock()
+_HEALTH_LOCK = threading.Lock()
+_HEALTH_CACHE: dict[str, object] = {"checked_at": 0.0, "path": "", "value": {}}
 _SCHEMA_BOOTSTRAP_KEY = "__schema_bootstrapped__"
 _LEGACY_RBAC_MIGRATION_KEY = "__legacy_rbac_seeded__"
 
@@ -875,11 +878,118 @@ def get_connection():
                 if "locked" not in str(exc).lower() or attempt >= 5:
                     raise
                 time.sleep(0.1 * (attempt + 1))
+        synchronous = str(
+            os.getenv("RADIOTEDU_SQLITE_SYNCHRONOUS", "FULL") or "FULL"
+        ).strip().upper()
+        if synchronous not in {"NORMAL", "FULL", "EXTRA"}:
+            synchronous = "FULL"
+        conn.execute(f"PRAGMA synchronous={synchronous}")
+        conn.execute("PRAGMA wal_autocheckpoint=1000")
+        conn.execute("PRAGMA journal_size_limit=67108864")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
     except Exception:
         conn.close()
         raise
+
+
+def database_health_snapshot(
+    *,
+    max_age_seconds: float = 15.0,
+    force: bool = False,
+) -> dict[str, object]:
+    """Return a bounded, cached SQLite integrity and storage readiness snapshot."""
+    now = time.monotonic()
+    db_path = get_db_path()
+    with _HEALTH_LOCK:
+        cached_at = float(_HEALTH_CACHE.get("checked_at") or 0.0)
+        cached_path = str(_HEALTH_CACHE.get("path") or "")
+        cached_value = dict(_HEALTH_CACHE.get("value") or {})
+        if (
+            not force
+            and cached_path == str(db_path)
+            and cached_value
+            and now - cached_at < max(0.0, max_age_seconds)
+        ):
+            return cached_value
+
+        conn = None
+        try:
+            conn = get_connection()
+            quick_check_row = conn.execute("PRAGMA quick_check(1)").fetchone()
+            quick_check = str(quick_check_row[0] if quick_check_row else "")
+            journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+            synchronous_row = conn.execute("PRAGMA synchronous").fetchone()
+            foreign_keys_row = conn.execute("PRAGMA foreign_keys").fetchone()
+            page_count_row = conn.execute("PRAGMA page_count").fetchone()
+            page_size_row = conn.execute("PRAGMA page_size").fetchone()
+
+            usage = shutil.disk_usage(db_path.parent)
+            free_percent = (
+                (float(usage.free) / float(usage.total)) * 100.0
+                if usage.total
+                else 0.0
+            )
+            disk_critical = usage.free < 512 * 1024 * 1024 or free_percent < 3.0
+            disk_warning = usage.free < 2 * 1024 * 1024 * 1024 or free_percent < 10.0
+            synchronous_value = int(synchronous_row[0] if synchronous_row else 0)
+            integrity_ok = quick_check.lower() == "ok"
+            foreign_keys_enabled = bool(
+                int(foreign_keys_row[0] if foreign_keys_row else 0)
+            )
+            journal_mode = str(
+                journal_mode_row[0] if journal_mode_row else ""
+            ).lower()
+            healthy = (
+                integrity_ok
+                and foreign_keys_enabled
+                and journal_mode == "wal"
+                and synchronous_value >= 2
+                and not disk_critical
+            )
+            state = "critical" if not integrity_ok or disk_critical else (
+                "degraded" if not healthy or disk_warning else "operational"
+            )
+            value: dict[str, object] = {
+                "state": state,
+                "healthy": healthy,
+                "integrity": quick_check,
+                "journal_mode": journal_mode,
+                "synchronous": {
+                    0: "off",
+                    1: "normal",
+                    2: "full",
+                    3: "extra",
+                }.get(synchronous_value, f"unknown:{synchronous_value}"),
+                "foreign_keys": foreign_keys_enabled,
+                "database_bytes": (
+                    int(db_path.stat().st_size) if db_path.exists() else 0
+                ),
+                "wal_bytes": (
+                    int(db_path.with_name(db_path.name + "-wal").stat().st_size)
+                    if db_path.with_name(db_path.name + "-wal").exists()
+                    else 0
+                ),
+                "allocated_bytes": int(page_count_row[0] if page_count_row else 0)
+                * int(page_size_row[0] if page_size_row else 0),
+                "disk_free_bytes": int(usage.free),
+                "disk_free_percent": round(free_percent, 2),
+            }
+        except Exception as exc:
+            value = {
+                "state": "critical",
+                "healthy": False,
+                "integrity": "unavailable",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        finally:
+            if conn is not None:
+                conn.close()
+
+        _HEALTH_CACHE["checked_at"] = now
+        _HEALTH_CACHE["path"] = str(db_path)
+        _HEALTH_CACHE["value"] = dict(value)
+        return dict(value)
 
 
 def _bootstrap_schema(cur) -> None:

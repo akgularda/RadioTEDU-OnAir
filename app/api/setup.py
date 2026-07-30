@@ -249,6 +249,12 @@ def _output_payload(conn, station_id: int, station_settings: dict[str, str]) -> 
             "icecast_password": str(row["icecast_password"] or ""),
             "stream_codec_profile": profile,
             "stream_bitrate_kbps": bitrate,
+            "icecast_tls_enabled": _truthy(
+                station_settings.get(
+                    "icecast_tls_enabled",
+                    str(int(row["icecast_port"] or 0) == 443).lower(),
+                )
+            ),
         }
 
     output_mode = str(station_settings.get("output_mode", "speaker") or "speaker").strip().lower()
@@ -270,6 +276,18 @@ def _output_payload(conn, station_id: int, station_settings: dict[str, str]) -> 
         "icecast_password": str(station_settings.get("icecast_password", "") or ""),
         "stream_codec_profile": profile,
         "stream_bitrate_kbps": bitrate,
+        "icecast_tls_enabled": _truthy(
+            station_settings.get(
+                "icecast_tls_enabled",
+                str(
+                    _parse_port(
+                        station_settings.get("icecast_port", "8000") or "8000",
+                        0,
+                    )
+                    == 443
+                ).lower(),
+            )
+        ),
     }
 
 
@@ -359,7 +377,15 @@ def _run_stream_output_test(output: dict[str, Any]) -> dict[str, Any]:
         "-metadata", "title=Radio output verification", _icecast_output_url(output),
     ])
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "message": "Icecast accepted a connection too slowly; check the server URL, firewall, and mount."}
     except Exception as exc:

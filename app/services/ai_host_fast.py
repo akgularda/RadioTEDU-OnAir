@@ -239,6 +239,8 @@ class AIHostFastService(AIHostService):
                     stdout=_sp.PIPE,
                     stderr=_sp.PIPE,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     env=child_env,
                 )
                 stdout_queue: queue.Queue[str] = queue.Queue()
@@ -427,6 +429,8 @@ class AIHostFastService(AIHostService):
                 input=json.dumps(payload),
                 text=True,
                 capture_output=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self._local_tts_request_timeout_seconds(),
                 env=child_env,
                 creationflags=creationflags,

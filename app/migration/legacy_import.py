@@ -18,7 +18,14 @@ def _normalize_track_type(raw: str) -> str:
     token = str(raw or "").strip().lower()
     if token in {"ad", "ads"}:
         return "ad"
-    if token in {"music", "jingle"}:
+    if token in {
+        "music",
+        "jingle",
+        "station_id",
+        "show",
+        "startup",
+        "announcement",
+    }:
         return token
     return "music"
 
@@ -213,7 +220,7 @@ def _resolve_imported_file_path(
 def _parse_bool(raw, default: bool = False) -> bool:
     if isinstance(raw, bool):
         return raw
-    token = str(raw or "").strip().lower()
+    token = "" if raw is None else str(raw).strip().lower()
     if token in {"1", "true", "yes", "on"}:
         return True
     if token in {"0", "false", "no", "off"}:

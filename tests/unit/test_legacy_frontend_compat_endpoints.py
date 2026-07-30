@@ -226,9 +226,11 @@ def test_upload_import_extracts_artist_and_duration_from_ffprobe(
             return "ffprobe"
         return None
 
-    def _fake_run(cmd, capture_output, text, timeout):
+    def _fake_run(cmd, capture_output, text, encoding, errors, timeout):
         assert cmd[0] == "ffprobe"
         assert str(audio_path.name) in str(cmd[-1])
+        assert encoding == "utf-8"
+        assert errors == "replace"
 
         class _Result:
             returncode = 0

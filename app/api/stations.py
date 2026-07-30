@@ -21,6 +21,7 @@ class StationOutputUpdate(BaseModel):
     icecast_mount: str = "/stream"
     icecast_user: str = "source"
     icecast_password: str = ""
+    icecast_tls_enabled: bool = False
     output_gain_db: float = 0.0
     stream_codec_profile: str = "aac_plus_196"
     stream_bitrate_kbps: int = 196
@@ -39,7 +40,8 @@ def _normalize_stream_profile(raw_profile: str, raw_bitrate: int) -> tuple[str, 
     return "aac_plus_196", bitrate
 
 
-def _row_to_output_payload(station_id: int, row) -> dict:
+def _row_to_output_payload(station_id: int, row, station_settings: dict | None = None) -> dict:
+    settings = dict(station_settings or {})
     if row is None:
         return {
             "station_id": station_id,
@@ -52,6 +54,10 @@ def _row_to_output_payload(station_id: int, row) -> dict:
             "icecast_user": "source",
             "icecast_password": "",
             "icecast_password_configured": False,
+            "icecast_tls_enabled": bool(
+                str(settings.get("icecast_tls_enabled", "false")).strip().lower()
+                in {"1", "true", "yes", "on"}
+            ),
             "output_gain_db": 0.0,
             "stream_codec_profile": "aac_plus_196",
             "stream_bitrate_kbps": 196,
@@ -67,6 +73,15 @@ def _row_to_output_payload(station_id: int, row) -> dict:
         "icecast_user": str(row["icecast_user"]),
         "icecast_password": "",
         "icecast_password_configured": bool(str(row["icecast_password"] or "")),
+        "icecast_tls_enabled": bool(
+            str(
+                settings.get(
+                    "icecast_tls_enabled",
+                    str(int(row["icecast_port"]) == 443).lower(),
+                )
+            ).strip().lower()
+            in {"1", "true", "yes", "on"}
+        ),
         "output_gain_db": float(row["output_gain_db"]),
         "stream_codec_profile": str(row["stream_codec_profile"] or "aac_plus_196"),
         "stream_bitrate_kbps": int(row["stream_bitrate_kbps"] or 196),
@@ -82,7 +97,8 @@ def get_station_output(
     conn = get_connection()
     repo = StationOutputRepository(conn)
     row = repo.get(station_id)
-    payload = _row_to_output_payload(station_id, row)
+    station_settings = SettingsRepository(conn).get_station(int(station_id))
+    payload = _row_to_output_payload(station_id, row, station_settings)
     return payload
 
 
@@ -164,9 +180,18 @@ def update_station_output(
             # The shared settings table must never contain stream passwords.
             # StationOutputRepository stores the secret in the per-user vault.
             "icecast_password": "",
+            "icecast_tls_enabled": str(bool(payload.icecast_tls_enabled)).lower(),
             "output_gain_db": str(float(payload.output_gain_db)),
             "stream_codec_profile": normalized_profile,
             "stream_bitrate_kbps": str(normalized_bitrate),
         },
     )
-    return {"ok": True, "output": _row_to_output_payload(payload.station_id, repo.get(payload.station_id))}
+    station_settings = SettingsRepository(conn).get_station(int(payload.station_id))
+    return {
+        "ok": True,
+        "output": _row_to_output_payload(
+            payload.station_id,
+            repo.get(payload.station_id),
+            station_settings,
+        ),
+    }

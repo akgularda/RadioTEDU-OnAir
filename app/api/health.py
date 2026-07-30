@@ -1,14 +1,46 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from app.api.runtime import runtime_registry, worker_loop_manager
 from app.config import get_db_path
 from app.dependency_bootstrap import managed_binary_path, read_bootstrap_state
-from app.db import get_connection, init_db
+from app.db import database_health_snapshot, get_connection, init_db
 from app.repositories.settings_repo import SettingsRepository
 from app.repositories.station_repo import StationRepository
 from app.runtime_paths import resolve_binary_details
 
 router = APIRouter()
+
+
+@router.get("/api/health/live")
+def liveness():
+    return {
+        "status": "ok",
+        "state": "operational",
+        "service": "radiotedu-onair",
+    }
+
+
+@router.get("/api/health/ready")
+def readiness():
+    try:
+        init_db()
+        database = database_health_snapshot(force=True)
+    except Exception as exc:
+        database = {
+            "state": "critical",
+            "healthy": False,
+            "integrity": "unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    ready = bool(database.get("healthy"))
+    payload = {
+        "status": "ok" if ready else "unavailable",
+        "state": "operational" if ready else "critical",
+        "ready": ready,
+        "database": database,
+    }
+    return JSONResponse(payload, status_code=200 if ready else 503)
 
 
 def describe_dependency(*names: str) -> dict[str, str | bool]:
@@ -74,6 +106,7 @@ def _resolve_station_snapshot(conn, requested_station_id: int | None) -> tuple[i
 @router.get("/api/health")
 def health(station_id: int | None = None):
     init_db()
+    database = database_health_snapshot()
     conn = get_connection()
     sid, station_name, active_station_id = _resolve_station_snapshot(conn, station_id)
     runtime_status = runtime_registry.status(sid)
@@ -111,7 +144,9 @@ def health(station_id: int | None = None):
 
     data_root = get_db_path().parent
     payload = {
-        "status": "ok",
+        "status": "ok" if bool(database.get("healthy")) else "degraded",
+        "overall_state": str(database.get("state") or "unknown"),
+        "database": database,
         "station_id": sid,
         "station_name": station_name,
         "active_station_id": active_station_id,

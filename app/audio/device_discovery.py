@@ -29,5 +29,12 @@ def list_output_devices(ffmpeg_bin: str | None = None) -> list[str]:
     resolved = ffmpeg_bin or require_binary("ffmpeg.exe")
     cmd = [ffmpeg_bin, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]
     cmd[0] = resolved
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
+    )
     return parse_ffmpeg_dshow_audio_devices(proc.stderr)

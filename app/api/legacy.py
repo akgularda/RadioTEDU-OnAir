@@ -68,6 +68,29 @@ _YTDLP_RECENT_JOB_IDS: list[str] = []
 _YTDLP_RUNNING_JOB_ID: str | None = None
 
 
+def _remove_station_owned_media(station_id: int) -> dict[str, object]:
+    """Remove only app-managed files owned by a deleted station."""
+    sid = int(station_id)
+    expected_name = f"station-{sid}"
+    removed: list[str] = []
+    errors: list[str] = []
+    data_root = get_db_path().parent.resolve()
+    for container_name in ("uploads", "downloads"):
+        container = (data_root / container_name).resolve()
+        target = (container / expected_name).resolve()
+        if target.parent != container or target.name != expected_name:
+            errors.append(f"{container_name}: unsafe station media path")
+            continue
+        if not target.exists():
+            continue
+        try:
+            shutil.rmtree(target)
+            removed.append(container_name)
+        except OSError as exc:
+            errors.append(f"{container_name}: {str(exc)[:200]}")
+    return {"ok": not errors, "removed": removed, "errors": errors}
+
+
 def _run_sqlite_write_with_retry(conn, operation, *, attempts: int = 6, delay_sec: float = 0.1):
     for attempt in range(max(1, int(attempts))):
         try:
@@ -292,6 +315,7 @@ class LibraryFolderSyncPayload(BaseModel):
     recursive: bool = True
     track_type: str = "music"
     mode: str = "replace"
+    skip_unplayable: bool = False
     remove_pending_queue: bool = True
     profile_label: str = ""
     default_genre: str = ""
@@ -410,7 +434,11 @@ def _get_audio_metadata(
     try:
         result = subprocess.run(
             [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
         )
         if result.returncode != 0:
             if require_playable:
@@ -498,7 +526,12 @@ def _run_ytdlp_download(url: str, output_dir: Path, audio_format: str, audio_qua
     existing_files = set(output_dir.iterdir()) if output_dir.exists() else set()
 
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=600,
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=600,
         cwd=str(output_dir),
     )
 
@@ -1784,11 +1817,13 @@ def delete_station(
         runtime_state = _runtime_stop_station(station_id=station_id)
         repo = StationRepository(conn)
         replacement_id = repo.delete(station_id)
+        media_cleanup = _remove_station_owned_media(station_id)
         return {
             "ok": True,
             "deleted_station_id": int(station_id),
             "active_station_id": int(replacement_id) if replacement_id is not None else None,
             "runtime": runtime_state,
+            "media_cleanup": media_cleanup,
         }
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -3578,6 +3613,8 @@ def pick_operator_folder(payload: FolderPickerPayload):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=600,
                 env=env,
             )
@@ -3645,6 +3682,8 @@ def pick_operator_file(payload: FilePickerPayload):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=600,
                 env=env,
             )
@@ -3709,6 +3748,16 @@ def sync_station_library_folder(payload: LibraryFolderSyncPayload):
     """
     init_db()
     conn = get_connection()
+    try:
+        return _sync_station_library_folder_with_connection(payload, conn)
+    finally:
+        conn.close()
+
+
+def _sync_station_library_folder_with_connection(
+    payload: LibraryFolderSyncPayload,
+    conn,
+):
     sid = int(payload.station_id or 1)
     kind = _normalize_track_type(payload.track_type)
     mode = str(payload.mode or "replace").strip().lower()
@@ -3771,7 +3820,7 @@ def sync_station_library_folder(payload: LibraryFolderSyncPayload):
             except ValueError:
                 display_path = path.name
             unplayable.append({"file": display_path, "reason": str(exc or "unplayable audio")[:300]})
-    if unplayable:
+    if unplayable and not bool(payload.skip_unplayable):
         raise HTTPException(
             status_code=422,
             detail={
@@ -3780,6 +3829,26 @@ def sync_station_library_folder(payload: LibraryFolderSyncPayload):
                 "files": unplayable[:50],
             },
         )
+    if unplayable:
+        invalid_paths = {
+            _canonical_library_path(base / str(item["file"]))
+            for item in unplayable
+        }
+        candidates_by_path = {
+            key: value
+            for key, value in candidates_by_path.items()
+            if key not in invalid_paths
+        }
+        candidates = [candidates_by_path[key] for key in sorted(candidates_by_path)]
+        if not candidates:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Folder contains no playable audio files",
+                    "invalid_count": len(unplayable),
+                    "files": unplayable[:50],
+                },
+            )
 
     existing_rows = conn.execute(
         "SELECT id, file_path, is_active FROM tracks "
@@ -3956,6 +4025,8 @@ def sync_station_library_folder(payload: LibraryFolderSyncPayload):
         "deactivated": len(deactivated_ids),
         "duplicate_rows_deactivated": duplicate_rows_deactivated,
         "metadata_fallbacks": metadata_fallbacks,
+        "invalid_files_skipped": len(unplayable),
+        "invalid_files": unplayable[:50],
         "pending_queue_items_removed": pending_removed,
         "program_queue_items_removed": program_items_removed,
         "pending_schedules_removed": schedules_removed,
@@ -4178,7 +4249,11 @@ async def legacy_upload_startup_sound(
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
         dur = float(result.stdout.strip() or 0)
         if dur > 0:

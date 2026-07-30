@@ -159,7 +159,9 @@ def trim_silence(
             "-c", "copy",
             tmp_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+        )
         if result.returncode != 0:
             # Retry with re-encode if stream copy fails
             cmd = [
@@ -172,7 +174,9 @@ def trim_silence(
                 "-to", f"{trim_end:.3f}",
                 tmp_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+            )
             if result.returncode != 0:
                 return {"trimmed": False, "error": result.stderr.strip()[:200], "removed_seconds": 0.0}
 
@@ -330,7 +334,9 @@ def clean_intro(
             "-c", "copy",
             tmp_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+        )
         if result.returncode != 0:
             # Retry with re-encode
             cmd = [
@@ -342,7 +348,9 @@ def clean_intro(
                 "-ss", f"{cut_point:.3f}",
                 tmp_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+            )
             if result.returncode != 0:
                 return {"cleaned": False, "error": result.stderr.strip()[:200], "removed_seconds": 0.0}
 
@@ -411,7 +419,9 @@ def trim_manual(
             "-c", "copy",
             tmp_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+        )
         if result.returncode != 0:
             cmd = [
                 ffmpeg,
@@ -423,7 +433,9 @@ def trim_manual(
                 "-to", f"{new_end:.3f}",
                 tmp_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+            )
             if result.returncode != 0:
                 return {"trimmed": False, "error": result.stderr.strip()[:200], "removed_seconds": 0.0}
 

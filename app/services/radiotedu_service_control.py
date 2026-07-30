@@ -23,6 +23,7 @@ from fastapi import HTTPException
 
 from app.runtime_paths import get_data_dir
 from app.dependency_bootstrap import managed_binary_path
+from app.reliability import atomic_write_json, read_json_object
 
 
 SETTINGS_KEY = "radiotedu_service_control_v1"
@@ -262,44 +263,32 @@ def _ledger_path() -> Path:
     return _runtime_dir() / "processes.json"
 
 
+def _process_registry_key(service_id: str) -> str:
+    # The data root can differ between isolated app instances and tests.
+    # Never let an in-memory process from one instance shadow another.
+    return f"{_runtime_dir().resolve()}::{service_id}"
+
+
 def _maintenance_path() -> Path:
     return _runtime_dir() / "database-maintenance.json"
 
 
 def _load_ledger() -> dict[str, dict[str, Any]]:
-    try:
-        value = json.loads(_ledger_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    value = read_json_object(_ledger_path())
     return value if isinstance(value, dict) else {}
 
 
 def _save_ledger(value: dict[str, dict[str, Any]]) -> None:
-    target = _ledger_path()
-    temporary = target.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(temporary, target)
+    atomic_write_json(_ledger_path(), value)
 
 
 def _load_maintenance() -> dict[str, dict[str, Any]]:
-    try:
-        value = json.loads(_maintenance_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    value = read_json_object(_maintenance_path())
     return value if isinstance(value, dict) else {}
 
 
 def _save_maintenance(value: dict[str, dict[str, Any]]) -> None:
-    target = _maintenance_path()
-    temporary = target.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(temporary, target)
+    atomic_write_json(_maintenance_path(), value)
 
 
 def _record_database_maintenance(
@@ -385,6 +374,8 @@ def _process_details_windows(pid: int) -> dict[str, Any] | None:
             ["powershell.exe", "-NoProfile", "-Command", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -434,11 +425,12 @@ def _process_fingerprint(details: dict[str, Any]) -> str:
 
 def _tracked_process(service_id: str) -> tuple[str, int | None]:
     with _LOCK:
-        proc = _PROCESSES.get(service_id)
+        process_key = _process_registry_key(service_id)
+        proc = _PROCESSES.get(process_key)
         if proc is not None:
             if proc.poll() is None:
                 return "running", int(proc.pid)
-            _PROCESSES.pop(service_id, None)
+            _PROCESSES.pop(process_key, None)
         ledger = _load_ledger()
         record = ledger.get(service_id)
         if not isinstance(record, dict):
@@ -519,6 +511,8 @@ def _source_status(
                 ["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True,
                 timeout=5,
             ).stdout.strip()
@@ -527,6 +521,8 @@ def _source_status(
                     ["git", "-C", str(root), "status", "--porcelain"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=True,
                     timeout=5,
                 ).stdout.strip()
@@ -911,7 +907,7 @@ def _start(
         log_file.close()
         raise HTTPException(status_code=409, detail="process_tracking_failed")
     with _LOCK:
-        _PROCESSES[service_id] = proc
+        _PROCESSES[_process_registry_key(service_id)] = proc
         ledger = _load_ledger()
         ledger[service_id] = {
             "pid": int(proc.pid),
@@ -938,7 +934,8 @@ def _stop(service_id: str) -> dict[str, Any]:
                 status_code=409,
                 detail="process_identity_changed",
             )
-        proc = _PROCESSES.get(service_id)
+        process_key = _process_registry_key(service_id)
+        proc = _PROCESSES.get(process_key)
         if proc is not None and proc.poll() is None:
             try:
                 if os.name == "nt":
@@ -946,7 +943,7 @@ def _stop(service_id: str) -> dict[str, Any]:
                 else:
                     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
                 proc.wait(timeout=8)
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, SystemError, subprocess.TimeoutExpired):
                 pass
         if _process_details(pid):
             if os.name == "nt":
@@ -962,7 +959,14 @@ def _stop(service_id: str) -> dict[str, Any]:
                     os.killpg(os.getpgid(pid), signal.SIGKILL)
                 except OSError:
                     pass
-        _PROCESSES.pop(service_id, None)
+        if proc is not None:
+            try:
+                proc.wait(timeout=2)
+            except (OSError, SystemError, subprocess.TimeoutExpired):
+                # The OS-level identity check above is authoritative. Reaping a
+                # stale Windows Popen handle must never block service cleanup.
+                pass
+        _PROCESSES.pop(process_key, None)
         ledger.pop(service_id, None)
         _save_ledger(ledger)
     return {"ok": True, "action": "stop"}
@@ -1210,6 +1214,8 @@ def _update_repository(
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True,
                 timeout=180,
                 env=environment,

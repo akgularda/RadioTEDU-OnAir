@@ -724,6 +724,7 @@ function renderOutputConfiguration() {
   setCleanValue('currentIcecastUser', output.icecast_user || 'source');
   setCleanValue('currentIcecastPassword', output.icecast_password || '');
   setCleanValue('currentIcecastProfile', output.stream_codec_profile || 'aac_plus_196');
+  setCleanChecked('currentIcecastTlsEnabled', asBool(output.icecast_tls_enabled));
   setCleanChecked('currentLocalEnabled', output.local_output_enabled);
 
   const selectedDevice = $('currentOutputDevice')?.dataset.dirty === '1'
@@ -938,6 +939,7 @@ async function syncLibraryFolder(event) {
     recursive: $('libraryRecursive').checked,
     track_type: 'music',
     mode: replace ? 'replace' : 'merge',
+    skip_unplayable: $('librarySkipUnplayable').checked,
     remove_pending_queue: replace,
     profile_label: $('libraryProfileLabel').value.trim(),
     default_genre: $('libraryDefaultGenre').value.trim(),
@@ -962,7 +964,8 @@ async function syncLibraryFolder(event) {
     delete $('libraryDefaultGenre').dataset.dirty;
     delete $('libraryDefaultLanguage').dataset.dirty;
     await Promise.all([loadCoreStatus(), loadQueue(), loadLibrary(1), loadJingles(), loadOperatorConfiguration()]);
-    const message = `Verified: ${result.active_files} ${payload.profile_label || payload.default_genre || 'music'} file(s) are active for ${selectedStationName()}; ${result.added} added, ${result.deactivated} outside the folder deactivated, ${result.pending_queue_items_removed} stale queue item(s) removed.`;
+    const skipped = Number(result.invalid_files_skipped || 0);
+    const message = `Verified: ${result.active_files} ${payload.profile_label || payload.default_genre || 'music'} file(s) are active for ${selectedStationName()}; ${result.added} added, ${result.deactivated} outside the folder deactivated, ${result.pending_queue_items_removed} stale queue item(s) removed${skipped ? `, ${skipped} unreadable file(s) skipped and reported` : ''}.`;
     setResult('librarySyncResult', message, 'success');
     logActivity(message);
     toast('Station library synchronized and verified');
@@ -1023,7 +1026,11 @@ async function pickManagedFolder(inputId, description) {
 }
 
 async function refreshAll(silent = false) {
-  if (!state.stationId || state.busy) return;
+  // Verified mutations call this before their busy overlay is released. Silent
+  // refreshes must still replace station-scoped caches (library, queue,
+  // jingles, and settings), otherwise a newly selected station can briefly
+  // display the previous station's controls and media.
+  if (!state.stationId || (state.busy && !silent)) return;
   if (!silent) setConnection('', 'Refreshing');
   try {
     await Promise.all([loadCoreStatus(), loadQueue(), loadLibrary(1), loadJingles(), loadOperatorConfiguration()]);
@@ -1051,6 +1058,30 @@ async function saveBroadcastAutostart(enabled) {
     if (asBool(settings.broadcast_autostart_enabled) !== Boolean(enabled)) {
       throw new Error('Backend did not persist the station broadcast start policy');
     }
+  }
+}
+
+async function updateBroadcastAutostartFromControl() {
+  const enabled = $('broadcastAutostartEnabled').checked;
+  setBusy(true, 'Saving restart policy…', 'Persisting and verifying the selected station');
+  setResult('broadcastResult');
+  try {
+    await saveBroadcastAutostart(enabled);
+    clearFormDirty(['broadcastAutostartEnabled']);
+    const message = enabled
+      ? `Verified: ${selectedStationName()} will resume automatically when OnAir restarts.`
+      : `Verified: ${selectedStationName()} will remain stopped when OnAir restarts.`;
+    setResult('broadcastResult', message, 'success');
+    logActivity(message);
+    toast('Restart policy verified');
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('broadcastResult', message, 'error');
+    logActivity(`Restart policy failed: ${message}`, 'error');
+    toast(message, 'error');
+    await loadOperatorConfiguration().catch(() => {});
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -1339,7 +1370,7 @@ async function refreshReadiness() {
   setResult('readinessResult');
   try {
     await loadOperatorConfiguration();
-    const blocking = state.setupState?.blocking || [];
+    const blocking = state.setupState?.blocking_reasons || state.setupState?.blocking || [];
     const message = state.setupState?.can_complete ? 'Verified: every required station check is ready.' : `Self-check finished: ${blocking.length} required item(s) need attention.`;
     setResult('readinessResult', message, state.setupState?.can_complete ? 'success' : 'error');
     logActivity(message, state.setupState?.can_complete ? 'success' : 'error');
@@ -1488,7 +1519,9 @@ function toggleCurrentOutputFields() {
     $('currentIcecastFields').hidden = !icecastEnabled;
     $('currentIcecastFields').querySelectorAll('input,select').forEach((node) => {
       node.disabled = !icecastEnabled;
-      if (node.id !== 'currentIcecastPassword') node.required = Boolean(icecastEnabled);
+      if (node.id !== 'currentIcecastPassword' && node.type !== 'checkbox') {
+        node.required = Boolean(icecastEnabled);
+      }
     });
   }
   if ($('currentDeviceLabel')) $('currentDeviceLabel').hidden = !localEnabled;
@@ -1521,6 +1554,7 @@ function currentOutputPayload() {
     icecast_mount: mount,
     icecast_user: $('currentIcecastUser').value.trim(),
     icecast_password: password,
+    icecast_tls_enabled: $('currentIcecastTlsEnabled').checked,
     output_gain_db: Number($('currentOutputGain').value || 0),
     stream_codec_profile: profile,
     stream_bitrate_kbps: profile === 'mp3_128' ? 128 : 196,
@@ -1536,6 +1570,7 @@ function outputMatches(saved, payload) {
     && Number(saved.icecast_port) === payload.icecast_port
     && String(saved.icecast_mount || '') === payload.icecast_mount
     && String(saved.icecast_user || '') === payload.icecast_user
+    && Boolean(saved.icecast_tls_enabled) === payload.icecast_tls_enabled
     && (!payload.icecast_enabled || Boolean(saved.icecast_password_configured))
     && String(saved.stream_codec_profile || '') === payload.stream_codec_profile
     && Number(saved.stream_bitrate_kbps) === payload.stream_bitrate_kbps;
@@ -1597,7 +1632,7 @@ async function saveCurrentOutput(event) {
       liveApplied = true;
     }
 
-    clearFormDirty(['currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentLocalEnabled', 'currentOutputDevice']);
+    clearFormDirty(['currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentIcecastTlsEnabled', 'currentLocalEnabled', 'currentOutputDevice']);
     await loadStations(state.stationId);
     await loadOperatorConfiguration();
     renderOutputConfiguration();
@@ -1659,7 +1694,7 @@ async function deleteCurrentStation() {
       return { verified: !(stations.stations || []).some((station) => Number(station.id) === deletingId), value: stations };
     }, { attempts: 20, interval: 400, description: 'station deletion' });
     await loadStations();
-    clearFormDirty(['currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentLocalEnabled', 'currentOutputDevice']);
+    clearFormDirty(['currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentIcecastTlsEnabled', 'currentLocalEnabled', 'currentOutputDevice']);
     await refreshAll(true);
     const message = `Verified: ${deletingName} was deleted.`;
     setResult('outputConfigResult', message, 'success'); logActivity(message); toast(message);
@@ -1821,7 +1856,13 @@ function previewEmergencySource() {
 
 async function ensureEmergencyStudioOwnership(stationId) {
   let snapshot = await api(`/api/studios?station_id=${stationId}`);
-  const userId = Number(currentUser().id || 0);
+  let user = currentUser();
+  if (!Number(user.id || 0)) {
+    user = await api('/api/auth/me');
+    localStorage.setItem(AUTH_KEYS.user, JSON.stringify(user));
+  }
+  const userId = Number(user.id || 0);
+  if (!userId) throw new Error('The signed-in operator identity could not be verified');
   let studio = (snapshot.studios || []).find((item) => item.is_on_air)
     || (snapshot.studios || []).find((item) => item.is_active && (!item.current_user_id || Number(item.current_user_id) === userId));
   if (!studio) {
@@ -1941,7 +1982,7 @@ function renderEmergencyStatus(runtime = state.runtime || {}) {
     : 'Not selected';
   $('startEmergencyButton').textContent = armed ? 'Confirm emergency takeover' : 'Arm emergency takeover';
   $('startEmergencyButton').disabled = live || waiting;
-  $('stopEmergencyButton').disabled = !live || state.emergency.stopping;
+  $('stopEmergencyButton').disabled = !live || state.emergency.starting || state.emergency.stopping;
   $('emergencyUrl').disabled = live || waiting;
   $('emergencyPreset').disabled = live || waiting;
   $('emergencyPresetButton').disabled = live || waiting;
@@ -2029,7 +2070,6 @@ async function startEmergency() {
     renderStarted = true;
     await attachEmergencyAudio(stream);
     state.emergency.active = true;
-    state.emergency.starting = false;
     stream.getTracks().forEach((track) => { track.onended = () => stopEmergency('browser stopped sharing').catch(() => {}); });
     const verifiedRuntime = await poll(async () => {
       const runtime = await api(`/api/runtime/${state.emergency.stationId}/status`);
@@ -2043,6 +2083,7 @@ async function startEmergency() {
         value: runtime,
       };
     }, { attempts: 30, interval: 250, description: 'exclusive emergency browser audio' });
+    state.emergency.starting = false;
     state.runtime = verifiedRuntime;
     renderEmergencyStatus(verifiedRuntime);
     startEmergencyStatusTimer();
@@ -2473,10 +2514,11 @@ function bindEvents() {
     clearFormDirty([
       'libraryFolder', 'libraryProfileLabel', 'libraryDefaultGenre', 'libraryDefaultLanguage', 'jingleFolder', 'jingleFolderReplace',
       'broadcastAutostartEnabled',
-      'currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentLocalEnabled', 'currentOutputDevice',
+      'currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentIcecastTlsEnabled', 'currentLocalEnabled', 'currentOutputDevice',
       'aiConfigEnabled', 'aiLlmModel', 'aiTtsProvider', 'aiVoicePersona', 'aiTtsModelPath', 'aiMaxSeconds', 'aiStationInterval', 'aiIncludeHistory', 'aiEducational', 'aiPromptTemplate',
     ]);
     state.stationId = Number($('stationSelect').value);
+    $('workspaceStation').textContent = `Active: ${selectedStationName()}`;
     localStorage.setItem('deterministic_wall_station_id', String(state.stationId));
     const url = new URL(window.location.href);
     url.searchParams.set('station_id', String(state.stationId));
@@ -2519,6 +2561,7 @@ function bindEvents() {
   $('librarySearchForm').addEventListener('submit', (event) => { event.preventDefault(); loadLibrary(1).catch((error) => toast(errorMessage(error), 'error')); });
   $('libraryFolderForm').addEventListener('submit', syncLibraryFolder);
   $('rescanLibraryButton').addEventListener('click', requestManagedLibraryRescan);
+  $('broadcastAutostartEnabled').addEventListener('change', updateBroadcastAutostartFromControl);
   $('browseLibraryFolderButton').addEventListener('click', () => pickManagedFolder('libraryFolder', 'Select this station\'s music folder'));
   ['libraryFolder', 'libraryProfileLabel', 'libraryDefaultGenre', 'libraryDefaultLanguage'].forEach((id) => {
     $(id).addEventListener('input', () => { $(id).dataset.dirty = '1'; });
@@ -2534,7 +2577,7 @@ function bindEvents() {
     'jingleFolder', 'jingleFolderReplace',
     'sweeperEnabled', 'sweeperInterval', 'sweeperMode',
     'broadcastAutostartEnabled',
-    'currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentLocalEnabled', 'currentOutputDevice',
+      'currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentIcecastTlsEnabled', 'currentLocalEnabled', 'currentOutputDevice',
     'aiConfigEnabled', 'aiLlmModel', 'aiTtsProvider', 'aiVoicePersona', 'aiTtsModelPath', 'aiMaxSeconds', 'aiStationInterval', 'aiIncludeHistory', 'aiEducational', 'aiPromptTemplate',
     'votingEnabled', 'votingBaseUrl', 'votingDeviceId', 'votingAgentToken', 'studyEnabled', 'studyBaseUrl',
   ].forEach((id) => $(id).addEventListener('input', () => { $(id).dataset.dirty = '1'; }));

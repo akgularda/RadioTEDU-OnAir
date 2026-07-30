@@ -101,7 +101,11 @@ def _probe_duration(file_path: str) -> float | None:
         result = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
         return round(float(result.stdout.strip()), 2)
     except Exception:

@@ -1,5 +1,5 @@
 from app.db import get_connection
-from app.api.setup import _icecast_test_protocol_args
+from app.api.setup import _icecast_test_protocol_args, _output_payload
 from app.repositories.settings_repo import SettingsRepository
 from app.repositories.station_output_repo import StationOutputRepository
 
@@ -70,6 +70,25 @@ def test_icecast_test_protocol_args_match_tls_production_transport():
     assert _icecast_test_protocol_args(
         {"icecast_port": 8000, "icecast_tls_enabled": False}
     ) == ["-legacy_icecast", "1"]
+
+
+def test_setup_output_payload_preserves_station_tls_transport_setting(client):
+    conn = get_connection()
+    StationOutputRepository(conn).upsert(
+        station_id=1,
+        local_output_enabled=False,
+        output_device_id="",
+        icecast_enabled=True,
+        icecast_host="stream.example.test",
+        icecast_port=443,
+        icecast_mount="/secure",
+        icecast_user="source",
+        icecast_password="secret",
+        output_gain_db=0,
+    )
+    settings = {"icecast_tls_enabled": "true"}
+    assert _output_payload(conn, 1, settings)["icecast_tls_enabled"] is True
+    conn.close()
 
 
 def _configure_setup_via_api(client, *, ai_enabled=True, profile="aac_plus_196"):

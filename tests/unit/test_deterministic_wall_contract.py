@@ -14,8 +14,10 @@ def test_operator_wall_exposes_every_self_service_control():
         "broadcastAutostartEnabled",
         "stationForm",
         "currentOutputForm",
+        "currentIcecastTlsEnabled",
         "testCurrentOutputButton",
         "libraryFolderForm",
+        "librarySkipUnplayable",
         "browseLibraryFolderButton",
         "librarySearchForm",
         "queueList",
@@ -47,12 +49,17 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "async function verifiedMutation" in javascript
     assert "idempotent: true" in javascript
     assert "async function saveCurrentOutput" in javascript
+    assert "icecast_tls_enabled: $('currentIcecastTlsEnabled').checked" in javascript
+    assert "state.setupState?.blocking_reasons" in javascript
+    assert "node.type !== 'checkbox'" in javascript
     assert "async function saveAiConfiguration" in javascript
     assert "async function syncJingleFolder" in javascript
     assert "async function changePassword" in javascript
     assert "async function startEmergency" in javascript
     assert "async function addTrackToQueue" in javascript
     assert "async function startBroadcast" in javascript
+    assert "async function updateBroadcastAutostartFromControl" in javascript
+    assert "addEventListener('change', updateBroadcastAutostartFromControl)" in javascript
     assert "async function stopBroadcast" in javascript
     assert "/operator-stop" in javascript
     assert "/operator-start-track" in javascript
@@ -62,6 +69,9 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "setCleanChecked('sweeperEnabled'" in javascript
     assert "setCleanValue('sweeperMode'" in javascript
     assert "settings.library_active_files" in javascript
+    assert "skip_unplayable: $('librarySkipUnplayable').checked" in javascript
+    assert "user = await api('/api/auth/me')" in javascript
+    assert "!live || state.emergency.starting || state.emergency.stopping" in javascript
     assert "serviceControlState" in javascript
     html = (WALL / "index.html").read_text(encoding="utf-8")
     assert "https://radyo.trt.net.tr/kanallar/radyo-1" in html
@@ -72,5 +82,6 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "/api/operator/pick-file" in javascript
     assert "data-service-path=" in javascript
     assert "database.last_update_at" in javascript
+    assert "if (!state.stationId || (state.busy && !silent)) return;" in javascript
     assert "Stop stream — keep playlist" in html
     assert "AI is content-only" in html

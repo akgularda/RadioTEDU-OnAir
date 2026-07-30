@@ -235,3 +235,41 @@ def test_folder_sync_rejects_entire_folder_before_writes_when_any_audio_is_unpla
     ).fetchone()["count"]
     conn.close()
     assert int(count) == 0
+
+
+def test_folder_sync_can_skip_and_report_unplayable_audio_when_explicitly_requested(
+    client, tmp_path, monkeypatch
+):
+    managed = tmp_path / "managed"
+    good = _audio(managed / "Good.mp3")
+    bad = _audio(managed / "Broken.mp3")
+
+    def probe(file_path: str, **_kwargs):
+        if Path(file_path).resolve() == bad:
+            raise ValueError("decoder rejected file")
+        return {"title": Path(file_path).stem, "artist": "", "duration": 120.0}
+
+    monkeypatch.setattr("app.api.legacy._get_audio_metadata", probe)
+    response = client.post(
+        "/api/library/folder/sync",
+        json={
+            "station_id": 1,
+            "folder": str(managed),
+            "mode": "replace",
+            "skip_unplayable": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["verified"] is True
+    assert payload["expected_files"] == 1
+    assert payload["active_files"] == 1
+    assert payload["invalid_files_skipped"] == 1
+    assert payload["invalid_files"][0]["file"] == bad.name
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT file_path FROM tracks WHERE station_id=1 AND is_active=1"
+    ).fetchall()
+    conn.close()
+    assert {Path(str(row["file_path"])).resolve() for row in rows} == {good}

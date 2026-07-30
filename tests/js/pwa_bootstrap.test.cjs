@@ -111,7 +111,7 @@ test('entrypoints load the editorial broadcast font pair', () => {
     }
 });
 
-test('service worker caches shell requests by full request and bypasses api traffic', () => {
+test('service worker keeps canonical pages fresh and bypasses api traffic', () => {
     assert.match(serviceWorkerJs, /const SHELL_ASSETS = \[/);
     assert.match(serviceWorkerJs, /const SHELL_ASSET_SET = new Set\(SHELL_ASSETS\)/);
     assert.match(serviceWorkerJs, /function normalizeShellCacheKey\(requestUrl\)/);
@@ -120,6 +120,7 @@ test('service worker caches shell requests by full request and bypasses api traf
     assert.doesNotMatch(serviceWorkerJs, /cache\.match\(request\)/);
     assert.doesNotMatch(serviceWorkerJs, /cache\.put\(request/);
     assert.match(serviceWorkerJs, /request\.url\.includes\('\/api\/'\)/);
+    assert.match(serviceWorkerJs, /const canonicalNavigation = SHELL_CANONICAL_PATHS\.has/);
 });
 
 test('worker normalizes query-bearing shell requests to canonical cache keys', async () => {
@@ -172,7 +173,7 @@ test('worker normalizes query-bearing shell requests to canonical cache keys', a
     fetchHandler(event);
     await event.promise;
 
-    assert.deepEqual(cacheCalls.match, ['/app']);
+    assert.deepEqual(cacheCalls.match, []);
     assert.deepEqual(cacheCalls.put, ['/app']);
     assert.equal(sandbox.module.exports.isShellAsset('https://example.com/app?station_id=7'), true);
     assert.equal(sandbox.module.exports.isShellAsset('https://example.com/login.html?next=%2Fapp%3Fstation_id%3D7'), true);

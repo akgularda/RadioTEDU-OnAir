@@ -1,4 +1,4 @@
-const CACHE_NAME = 'RadioTEDU-OnAir-shell-v8';
+const CACHE_NAME = 'RadioTEDU-OnAir-shell-v9';
 const SHELL_ASSETS = [
     '/',
     '/app',
@@ -73,8 +73,24 @@ self.addEventListener('fetch', event => {
         return;
     }
     const cacheKey = normalizeShellCacheKey(request.url);
+    const canonicalNavigation = SHELL_CANONICAL_PATHS.has(new URL(request.url).pathname);
     event.respondWith(
         caches.open(CACHE_NAME).then(async cache => {
+            if (canonicalNavigation) {
+                try {
+                    const response = await fetch(request);
+                    if (response && response.ok) {
+                        await cache.put(cacheKey, response.clone());
+                    }
+                    return response;
+                } catch (error) {
+                    const fallback = await cache.match(cacheKey);
+                    if (fallback) {
+                        return fallback;
+                    }
+                    throw error;
+                }
+            }
             const hit = await cache.match(cacheKey);
             if (hit) {
                 return hit;
