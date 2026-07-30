@@ -146,6 +146,21 @@ Each station has independent:
 Changing one station must not silently alter another station's output or media
 profile.
 
+## Operator workspaces and optional services
+
+The dashboard remembers the last selected **On Air**, **Media**,
+**Automation**, **Emergency**, **Services**, **Settings**, or **Diagnostics**
+workspace. Station registration and output credentials live only in Settings;
+daily start/stop and timeline state live only in On Air.
+
+The Services workspace exposes a fixed allowlist: Ollama, Shared AI, the AI
+broadcast supervisor, Voting agent/backend, and Juke media agent/backend.
+Ollama uses the loopback `http://127.0.0.1:11434/api/tags` endpoint and accepts
+only validated model names for its fixed `ollama pull` action. Repository
+updates require a stopped service, clean worktree, configured upstream, and
+fast-forward merge. Database updates require a stopped service and successful
+backup before a fixed migration command is allowed.
+
 ## Codec profiles
 
 The output configuration supports the packaged profiles exposed by the

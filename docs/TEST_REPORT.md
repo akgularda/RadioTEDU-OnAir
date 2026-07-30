@@ -95,12 +95,13 @@ The only warning was the absence of the optional legacy `schedule` table.
 ## Release artifact
 
 - Installer: `release/setup/RadioTEDU-OnAir-Setup-1.0.0.exe`
-- Size: 315,131,119 bytes (300.5 MiB)
+- Size: 315,162,644 bytes (300.6 MiB)
 - SHA-256:
-  `AD8143A9A3D65BD4A4332A05FB2FA74A963C04324DB7C8FAD8F7A1954D60FCDA`
+  `5A5D386A7E469AC8EBCF777002151856C23B985CD76C800E153FE2F0AE8878E0`
 - Checksum sidecar:
   `release/setup/RadioTEDU-OnAir-Setup-1.0.0.sha256`
 - Checksum comparison: matched
+- Final desktop-bundle smoke check: passed on isolated port 54517
 - Authenticode status: `NotSigned`
 
 An organizational Authenticode certificate is still required to remove the
@@ -131,21 +132,23 @@ second cycle produced the measurements above.
 Verified on 2026-07-30 against the pinned RadioTEDU AI, Voting, and Juke
 repositories:
 
-- OnAir broad suite: 769 passed, 3 skipped; the only first-run failure was the
-  Windows process-fingerprint timeout under concurrent packaging load.
-- Current OnAir control-plane regression after replacing that slow WMI lookup:
-  19 passed, including fixed service commands, signed Juke health, protected
-  handoff provisioning, database guards, and deterministic wall contracts.
+- Current OnAir broad suite: 776 passed, 3 skipped, and 3 subtests passed in
+  1,195.85 seconds.
+- Current OnAir control-plane regression: 19 passed, including fixed service
+  commands, signed Juke health, protected handoff provisioning, Ollama model
+  validation, guarded fast-forward repository updates, database guards, and
+  deterministic wall contracts.
 - AI Radio: 422 backend tests passed, 1 skipped; 14 frontend tests passed; the
   production frontend build completed.
 - Voting: 364 backend tests passed with 2 skipped; 74 local-agent tests passed;
   both managed packages compiled.
 - Juke: 285 backend tests and 9 media-agent tests passed; the backend compiled
   after repairing its reproducible lockfile.
-- Visible Edge mouse run: 6 of 6 cards loaded with repository, protected config,
-  and health paths; Check All completed; the database two-click guard worked;
-  settings saved; zero browser console errors; all autostart switches remained
-  off.
+- Visible Edge mouse run: all 7 task menus activated with pointer coordinates;
+  the TRT Radyo Haber preset populated the emergency source; emergency takeover
+  armed without transmission; 7 service cards loaded; Check All completed; the
+  database, repository, and Ollama-model two-click guards worked; settings
+  saved; zero browser console errors; all autostart switches remained off.
 - Exact-value scan: none of the private handoff's credential values occur in
   tracked source across OnAir, AI, Voting, or Juke.
 

@@ -8,7 +8,7 @@ The wall does not treat a button click or an HTTP response as proof. After every
 
 ## First station setup
 
-1. Add the station in **Stations**. Enter an Icecast host, port, mount beginning with `/`, source user, source password, and codec.
+1. Open **Settings** and use **Add your first station**. Enter an Icecast host, port, mount beginning with `/`, source user, source password, and codec. After registration, the same panel becomes **Add another station** and remains outside the daily On Air workspace.
 2. Select the new station at the top.
 3. In **Identity and broadcast output**, check the saved values, select a local monitor only if wanted, then click **Save, apply, and verify output**.
 4. Click **Test stream destination**. A successful test means the destination is configured and reachable. A running station is additionally verified by healthy required runtime branches.
@@ -47,15 +47,26 @@ Music and jingle profile settings are independent. Syncing a jingle folder canno
 
 Use **Complete AI configuration** to select the language model, voice provider (Local Qwen TTS, Edge TTS, or OmniVoice), persona, optional model path, prompt, timing, and history options. Save first, then generate a test voice. AI is content-only: it cannot start or stop a station, change the queue or jingle rule, or block an operator-authorized music-continuity start. Disabling AI immediately returns the station to music-continuity mode without stopping playout.
 
-## Emergency Room
+Open **Services** for the local Ollama runtime and the fixed RadioTEDU AI,
+Voting, and Juke components. Ollama model names use the
+`ollama:model-name` form in station AI settings. Runtime, model installation,
+repository updates, and database maintenance have separate two-click guards.
+Core music, microphone, emergency, and stream controls remain available when
+all optional services are disabled or offline.
 
-1. Enter an HTTPS page and click **Open page and broadcast its audio**.
-2. Chrome opens the page and asks what to share.
-3. Select that tab and enable **Share tab audio**.
-4. Confirm the signal indicator moves from waiting to a live dB value.
-5. Click **Stop emergency audio** to restore the saved normal music/mix settings.
+## Emergency Broadcast
 
-Video is never sent. Only PCM audio from the explicitly shared browser tab is forwarded. Closing or losing the shared track triggers cleanup and restoration.
+1. Open **Emergency** and choose TRT Radyo 1, TRT FM, TRT Radyo Haber, or enter another approved HTTP/HTTPS public-service page.
+2. Click **Open and preview**. This opens the source without changing the broadcast.
+3. Start playback on the source page, click **Arm emergency takeover**, then click **Confirm emergency takeover** within 20 seconds.
+4. Select the opened source tab in the browser prompt and enable **Share tab audio**.
+5. Wait for the verified live dB value. Normal program audio is muted only after the capture and render path starts successfully.
+6. Click **Stop emergency audio — restore playlist** to restore the exact saved normal music/mix settings.
+
+The emergency path is not connected to `/lofi`. Video is never sent. Only PCM
+audio from the explicitly shared browser tab is forwarded. Closing or losing
+the shared track, changing station, signing out, or a failed start triggers
+cleanup and restoration.
 
 ## Account and safety
 

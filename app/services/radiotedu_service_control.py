@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from urllib.request import Request, urlopen
 from fastapi import HTTPException
 
 from app.runtime_paths import get_data_dir
+from app.dependency_bootstrap import managed_binary_path
 
 
 SETTINGS_KEY = "radiotedu_service_control_v1"
@@ -29,6 +31,8 @@ CONFIRMATIONS = {
     "stop": "STOP SERVICE",
     "restart": "RESTART SERVICE",
     "update_database": "UPDATE DATABASE",
+    "update_repository": "UPDATE REPOSITORY",
+    "pull_model": "INSTALL MODEL",
 }
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 SECRET_KEY_PARTS = ("secret", "password", "token", "credential", "authorization")
@@ -36,6 +40,17 @@ _LOCK = threading.RLock()
 _PROCESSES: dict[str, subprocess.Popen] = {}
 
 SERVICE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "ollama_runtime": {
+        "product": "RadioTEDU AI",
+        "name": "Ollama Model Runtime",
+        "description": "Local, optional language-model runtime. Music and live broadcasting remain independent.",
+        "kind": "ollama",
+        "required": (),
+        "default_health_urls": ("http://127.0.0.1:11434/api/tags",),
+        "mounts": (),
+        "database_supported": False,
+        "database_kind": "",
+    },
     "rtai_shared_ai": {
         "product": "RadioTEDU AI Radio",
         "name": "Shared AI (Qwen)",
@@ -439,10 +454,48 @@ def _tracked_process(service_id: str) -> tuple[str, int | None]:
         return "stopped", None
 
 
+def _ollama_executable() -> Path | None:
+    candidates = [
+        Path(value)
+        for value in (
+            os.getenv("RADIOTEDU_OLLAMA_EXE", "").strip(),
+            shutil.which("ollama.exe") or shutil.which("ollama") or "",
+            str(managed_binary_path("ollama.exe")),
+            str(
+                Path(os.getenv("LOCALAPPDATA", ""))
+                / "Programs"
+                / "Ollama"
+                / "ollama.exe"
+            )
+            if os.getenv("LOCALAPPDATA", "").strip()
+            else "",
+        )
+        if value
+    ]
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve(strict=False)
+        except OSError:
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
 def _source_status(
     service_id: str, settings: dict[str, Any]
 ) -> dict[str, Any]:
     definition = SERVICE_DEFINITIONS[service_id]
+    if definition["kind"] == "ollama":
+        executable = _ollama_executable()
+        return {
+            "configured": True,
+            "ready": executable is not None,
+            "commit": "",
+            "dirty": False,
+            "missing": [] if executable else ["ollama.exe"],
+            "executable": str(executable or ""),
+        }
     raw = str(settings.get("source_dir") or "")
     if not raw:
         return {
@@ -630,11 +683,21 @@ def service_status(
     )
     source = _source_status(service_id, config)
     config_path = Path(str(config.get("config_path") or ""))
-    config_ready = bool(str(config.get("config_path") or "")) and (
-        config_path.is_dir()
-        if definition["kind"] == "rtai_service"
-        else config_path.is_file()
+    config_ready = definition["kind"] == "ollama" or (
+        bool(str(config.get("config_path") or ""))
+        and (
+            config_path.is_dir()
+            if definition["kind"] == "rtai_service"
+            else config_path.is_file()
+        )
     )
+    if (
+        definition["kind"] == "ollama"
+        and runtime == "stopped"
+        and checks
+        and all(item["ok"] for item in checks)
+    ):
+        runtime = "external"
     if not config["enabled"]:
         state = "disabled"
     elif checks and all(item["ok"] for item in checks):
@@ -693,6 +756,7 @@ def public_settings(settings: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 "product": definition["product"],
                 "name": definition["name"],
                 "description": definition["description"],
+                "kind": definition["kind"],
                 "database_supported": bool(
                     definition["database_supported"]
                 ),
@@ -708,6 +772,11 @@ def _build_command(
     service_id: str, config: dict[str, Any]
 ) -> tuple[list[str], Path]:
     definition = SERVICE_DEFINITIONS[service_id]
+    if definition["kind"] == "ollama":
+        executable = _ollama_executable()
+        if not executable:
+            raise HTTPException(status_code=409, detail="ollama_not_installed")
+        return [str(executable), "serve"], executable.parent
     source = Path(config["source_dir"])
     if definition["kind"] == "rtai_service":
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
@@ -772,8 +841,15 @@ def _start(
     if not source["ready"]:
         raise HTTPException(status_code=409, detail="service_source_not_ready")
     definition = SERVICE_DEFINITIONS[service_id]
+    if definition["kind"] == "ollama":
+        current = service_status(service_id, settings, include_health=True)
+        if current["runtime"] == "external":
+            raise HTTPException(
+                status_code=409,
+                detail="ollama_already_running_outside_onair",
+            )
     config_path = Path(config["config_path"])
-    config_ready = (
+    config_ready = definition["kind"] == "ollama" or (
         config_path.is_dir()
         if definition["kind"] == "rtai_service"
         else config_path.is_file()
@@ -1097,11 +1173,102 @@ def _update_rtai_database(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _update_repository(
+    service_id: str, config: dict[str, Any]
+) -> dict[str, Any]:
+    if SERVICE_DEFINITIONS[service_id]["kind"] == "ollama":
+        raise HTTPException(
+            status_code=409,
+            detail="repository_update_not_supported",
+        )
+    runtime, _pid = _tracked_process(service_id)
+    if runtime == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="stop_service_before_repository_update",
+        )
+    source = _source_status(service_id, config)
+    root = Path(str(config.get("source_dir") or ""))
+    if not source["ready"] or not (root / ".git").exists():
+        raise HTTPException(status_code=409, detail="service_repository_not_ready")
+    if source["dirty"]:
+        raise HTTPException(
+            status_code=409,
+            detail="repository_has_local_changes",
+        )
+    previous = str(source.get("commit") or "")
+    commands = (
+        ["git", "-C", str(root), "fetch", "--prune", "origin"],
+        ["git", "-C", str(root), "merge", "--ff-only", "@{upstream}"],
+    )
+    environment = dict(os.environ)
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GCM_INTERACTIVE"] = "Never"
+    try:
+        for command in commands:
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=180,
+                env=environment,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="repository_fast_forward_failed",
+        ) from exc
+    updated = _source_status(service_id, config)
+    return {
+        "ok": True,
+        "action": "update_repository",
+        "previous_commit": previous,
+        "commit": str(updated.get("commit") or ""),
+        "changed": previous != str(updated.get("commit") or ""),
+    }
+
+
+def _pull_ollama_model(model_name: str) -> dict[str, Any]:
+    model = str(model_name or "").strip()
+    if not model or len(model) > 120 or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._:/-]*",
+        model,
+    ):
+        raise HTTPException(status_code=400, detail="invalid_ollama_model")
+    executable = _ollama_executable()
+    if not executable:
+        raise HTTPException(status_code=409, detail="ollama_not_installed")
+    try:
+        subprocess.run(
+            [str(executable), "pull", model],
+            cwd=str(executable.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=1800,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="ollama_model_install_timed_out",
+        ) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="ollama_model_install_failed",
+        ) from exc
+    return {"ok": True, "action": "pull_model", "model": model}
+
+
 def perform_action(
     service_id: str,
     action: str,
     confirmation: str,
     settings: dict[str, dict[str, Any]],
+    model_name: str = "",
 ) -> dict[str, Any]:
     if service_id not in SERVICE_DEFINITIONS:
         raise HTTPException(status_code=404, detail="unknown_service")
@@ -1124,6 +1291,15 @@ def perform_action(
     if action == "restart":
         _stop(service_id)
         return _start(service_id, settings)
+    if action == "update_repository":
+        return _update_repository(service_id, settings[service_id])
+    if action == "pull_model":
+        if service_id != "ollama_runtime":
+            raise HTTPException(
+                status_code=409,
+                detail="model_install_not_supported",
+            )
+        return _pull_ollama_model(model_name)
     definition = SERVICE_DEFINITIONS[service_id]
     if not definition["database_supported"]:
         raise HTTPException(

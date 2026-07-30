@@ -5,7 +5,15 @@ const AUTH_KEYS = Object.freeze({
   refresh: 'cleanroom_auth_refresh_token',
   user: 'cleanroom_auth_user',
 });
-const RADIOTEDU_LOFI_PAGE = 'https://stream.radiotedu.com/lofi';
+const OPERATOR_VIEWS = Object.freeze({
+  onair: { eyebrow: 'LIVE CONTROL', title: 'On Air', description: 'Control the active broadcast and see what plays next.' },
+  media: { eyebrow: 'LIBRARY & PLAYOUT', title: 'Media', description: 'Import, validate, find, queue, and reorder station audio.' },
+  automation: { eyebrow: 'DETERMINISTIC RULES', title: 'Automation', description: 'Manage jingles and exact, operator-defined insertion rules.' },
+  emergency: { eyebrow: 'PRIORITY TAKEOVER', title: 'Emergency Broadcast', description: 'Preview and broadcast an approved external public-service source.' },
+  services: { eyebrow: 'OPTIONAL SYSTEMS', title: 'Services', description: 'Control Ollama, RadioTEDU AI, Voting, Juke, and their databases.' },
+  settings: { eyebrow: 'STATION ADMINISTRATION', title: 'Settings', description: 'Configure the selected station, output, and operator account.' },
+  diagnostics: { eyebrow: 'RELIABILITY', title: 'Diagnostics', description: 'Run readiness checks and review operator activity.' },
+});
 
 const state = {
   stationId: null,
@@ -19,6 +27,7 @@ const state = {
   integrations: null,
   radioteduServices: null,
   serviceActionArmed: {},
+  activeView: 'onair',
   setupState: null,
   audioDevices: [],
   sweeper: null,
@@ -61,6 +70,46 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const asBool = (value) => value === true || ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+
+function activateOperatorView(requestedView, { persist = true, focus = false } = {}) {
+  const view = OPERATOR_VIEWS[requestedView] ? requestedView : 'onair';
+  state.activeView = view;
+  document.querySelectorAll('[data-operator-view]').forEach((node) => {
+    node.hidden = node.dataset.operatorView !== view;
+  });
+  document.querySelectorAll('[data-operator-nav]').forEach((button) => {
+    const active = button.dataset.operatorNav === view;
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  const definition = OPERATOR_VIEWS[view];
+  $('workspaceEyebrow').textContent = definition.eyebrow;
+  $('workspaceTitle').textContent = definition.title;
+  $('workspaceDescription').textContent = definition.description;
+  $('workspaceStation').textContent = state.stationId ? `Active: ${selectedStationName()}` : 'No station selected';
+  document.title = `${definition.title} · RadioTEDU OnAir`;
+  if (persist) {
+    localStorage.setItem('radiotedu_onair_active_view', view);
+    const url = new URL(window.location.href);
+    url.hash = view;
+    window.history.replaceState({}, '', url);
+  }
+  if (focus) $('workspaceTitle').focus?.({ preventScroll: true });
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function initializeOperatorNavigation() {
+  const stationCard = document.querySelector('.station-card');
+  const settingsGroup = document.querySelector('.configuration-grid');
+  if (stationCard && settingsGroup) settingsGroup.appendChild(stationCard);
+  const hashView = String(window.location.hash || '').replace(/^#/, '');
+  const savedView = localStorage.getItem('radiotedu_onair_active_view') || '';
+  activateOperatorView(OPERATOR_VIEWS[hashView] ? hashView : savedView, { persist: false });
+  $('operatorNavigation').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-operator-nav]');
+    if (button) activateOperatorView(button.dataset.operatorNav, { focus: true });
+  });
+}
 
 function formatDuration(seconds, empty = '--:--') {
   const total = Number(seconds);
@@ -334,6 +383,8 @@ async function loadStations(preferredId = null) {
   $('stationSelect').innerHTML = state.stations.map((station) => `<option value="${Number(station.id)}">${escapeHtml(station.name)}</option>`).join('');
   $('stationSelect').value = String(state.stationId);
   $('stationCount').textContent = String(state.stations.length);
+  document.querySelector('.station-card h2').textContent = state.stations.length ? 'Add another station' : 'Add your first station';
+  $('workspaceStation').textContent = `Active: ${selectedStationName()}`;
 }
 
 async function loadCoreStatus() {
@@ -419,6 +470,7 @@ function renderRadioTEDUServices() {
   if (container.dataset.signature !== signature) {
     container.dataset.signature = signature;
     container.innerHTML = definitions.map((definition) => {
+      const isOllama = definition.kind === 'ollama';
       const mounts = Array.isArray(definition.mounts) && definition.mounts.length
         ? ` Mounts: ${definition.mounts.join(', ')}.`
         : '';
@@ -436,7 +488,11 @@ function renderRadioTEDUServices() {
             <label class="check-row"><input id="${serviceControlId(definition.id, 'enabled')}" type="checkbox"> Enable management</label>
             <label class="check-row"><input id="${serviceControlId(definition.id, 'autostart')}" type="checkbox"> Start with RadioTEDU OnAir</label>
           </div>
-          <div class="service-paths">
+          ${isOllama ? `
+          <div class="ollama-controls">
+            <div class="inline-status"><b>Local-only runtime</b><br>RadioTEDU OnAir detects the installed Ollama executable and talks only to 127.0.0.1. AI can be disabled without affecting music, microphone, or streaming.</div>
+            <label>Model to install<input id="${serviceControlId(definition.id, 'model')}" value="qwen2.5:0.5b" maxlength="120" autocomplete="off" placeholder="qwen2.5:0.5b"></label>
+          </div>` : `<div class="service-paths">
             <div class="service-path-picker">
               <label>Component source folder<input id="${serviceControlId(definition.id, 'source')}" autocomplete="off" placeholder="Absolute local source path"></label>
               <button class="button secondary" type="button" data-service-path="source" data-service-id="${escapeHtml(definition.id)}" data-picker-kind="folder">Browse</button>
@@ -447,13 +503,14 @@ function renderRadioTEDUServices() {
             </div>
             <label class="service-health-field">Health URLs — one per line<textarea id="${serviceControlId(definition.id, 'health')}" rows="2" placeholder="Loopback HTTP or external HTTPS"></textarea></label>
             ${definition.database_supported ? `<div class="service-backup-field service-path-picker"><label>Database backup folder<input id="${serviceControlId(definition.id, 'backup')}" autocomplete="off" placeholder="Required before database updates"></label><button class="button secondary" type="button" data-service-path="backup" data-service-id="${escapeHtml(definition.id)}" data-picker-kind="folder">Browse</button></div>` : ''}
-          </div>
+          </div>`}
           <div class="service-health-summary" id="${serviceControlId(definition.id, 'summary')}">Save paths, then check health.</div>
           <div class="service-actions">
             <button class="button secondary" type="button" data-service-action="check" data-service-id="${escapeHtml(definition.id)}">Check</button>
             <button class="button secondary" type="button" data-service-action="start" data-service-id="${escapeHtml(definition.id)}">Start</button>
             <button class="button secondary" type="button" data-service-action="stop" data-service-id="${escapeHtml(definition.id)}">Stop</button>
             <button class="button secondary" type="button" data-service-action="restart" data-service-id="${escapeHtml(definition.id)}">Restart</button>
+            ${isOllama ? `<button class="button secondary" type="button" data-service-action="pull_model" data-service-id="${escapeHtml(definition.id)}">Install model</button>` : `<button class="button secondary" type="button" data-service-action="update_repository" data-service-id="${escapeHtml(definition.id)}">Update repository</button>`}
             ${definition.database_supported ? `<button class="button danger" type="button" data-service-action="update_database" data-service-id="${escapeHtml(definition.id)}">Update database</button>` : ''}
           </div>
         </section>`;
@@ -470,9 +527,9 @@ function renderRadioTEDUServices() {
     const status = statuses.get(serviceId) || {};
     setCleanChecked(serviceControlId(serviceId, 'enabled'), Boolean(config.enabled));
     setCleanChecked(serviceControlId(serviceId, 'autostart'), Boolean(config.auto_start));
-    setCleanValue(serviceControlId(serviceId, 'source'), config.source_dir || '');
-    setCleanValue(serviceControlId(serviceId, 'config'), config.config_path || '');
-    setCleanValue(serviceControlId(serviceId, 'health'), (config.health_urls || []).join('\n'));
+    if ($(serviceControlId(serviceId, 'source'))) setCleanValue(serviceControlId(serviceId, 'source'), config.source_dir || '');
+    if ($(serviceControlId(serviceId, 'config'))) setCleanValue(serviceControlId(serviceId, 'config'), config.config_path || '');
+    if ($(serviceControlId(serviceId, 'health'))) setCleanValue(serviceControlId(serviceId, 'health'), (config.health_urls || []).join('\n'));
     if ($(serviceControlId(serviceId, 'backup'))) {
       setCleanValue(serviceControlId(serviceId, 'backup'), config.database_backup_dir || '');
     }
@@ -489,9 +546,11 @@ function renderRadioTEDUServices() {
         return `${item.ok ? 'OK' : 'FAIL'} ${escapeHtml(item.url)} (${escapeHtml(item.status || 'offline')}, ${escapeHtml(item.latency_ms)} ms)${signals}`;
       }).join('<br>')
       : 'Health has not been checked in this view.';
-    const sourceText = status.source?.ready
-      ? `Source ready${status.source.commit ? ` at ${escapeHtml(status.source.commit)}${status.source.dirty ? ' (local changes)' : ''}` : ''}`
-      : `Source ${status.source?.configured ? 'not ready' : 'not configured'}`;
+    const sourceText = definition.kind === 'ollama'
+      ? status.source?.ready ? 'Ollama installed' : 'Ollama is not installed'
+      : status.source?.ready
+        ? `Source ready${status.source.commit ? ` at ${escapeHtml(status.source.commit)}${status.source.dirty ? ' (local changes)' : ''}` : ''}`
+        : `Source ${status.source?.configured ? 'not ready' : 'not configured'}`;
     const mountText = Array.isArray(status.mounts) && status.mounts.length
       ? status.mounts.join(', ')
       : 'none';
@@ -504,10 +563,11 @@ function renderRadioTEDUServices() {
       : '';
     $(serviceControlId(serviceId, 'summary')).innerHTML = `<b>${escapeHtml(sourceText)}</b> · Runtime: ${escapeHtml(status.runtime || 'stopped')} · Config: ${status.config_ready ? 'ready' : 'not ready'} · Mounts: ${escapeHtml(mountText)}<br>${healthText}${databaseText}`;
     const running = status.runtime === 'running';
+    const externallyRunning = status.runtime === 'external';
     const start = card?.querySelector('[data-service-action="start"]');
     const stop = card?.querySelector('[data-service-action="stop"]');
     const restart = card?.querySelector('[data-service-action="restart"]');
-    if (start) start.disabled = running;
+    if (start) start.disabled = running || externallyRunning;
     if (stop) stop.disabled = !running;
     if (restart) restart.disabled = !running;
   });
@@ -520,12 +580,13 @@ function collectRadioTEDUServiceSettings() {
   const payload = {};
   (state.radioteduServices?.definitions || []).forEach((definition) => {
     const serviceId = definition.id;
+    const config = state.radioteduServices?.services?.[serviceId] || {};
     payload[serviceId] = {
       enabled: $(serviceControlId(serviceId, 'enabled')).checked,
       auto_start: $(serviceControlId(serviceId, 'autostart')).checked,
-      source_dir: $(serviceControlId(serviceId, 'source')).value.trim(),
-      config_path: $(serviceControlId(serviceId, 'config')).value.trim(),
-      health_urls: $(serviceControlId(serviceId, 'health')).value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+      source_dir: $(serviceControlId(serviceId, 'source'))?.value.trim() || '',
+      config_path: $(serviceControlId(serviceId, 'config'))?.value.trim() || '',
+      health_urls: $(serviceControlId(serviceId, 'health'))?.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) || config.health_urls || [],
       database_backup_dir: $(serviceControlId(serviceId, 'backup'))?.value.trim() || '',
     };
   });
@@ -1723,12 +1784,39 @@ function armEmergencyTakeover() {
   );
 }
 
-function useRadioTeduLofiEmergencySource() {
-  $('emergencyUrl').value = RADIOTEDU_LOFI_PAGE;
-  state.emergency.sourceUrl = RADIOTEDU_LOFI_PAGE;
+function useEmergencyPreset() {
+  const selected = String($('emergencyPreset').value || '').trim();
+  if (!selected) {
+    $('emergencyUrl').focus();
+    setResult('emergencyResult', 'Custom source selected. Enter an approved HTTP or HTTPS page.');
+    return;
+  }
+  const url = normalizeEmergencyUrl(selected);
+  $('emergencyUrl').value = url;
+  state.emergency.sourceUrl = url;
   clearEmergencyArm();
   renderEmergencyStatus();
-  setResult('emergencyResult', 'RadioTEDU /lofi selected. Arm takeover when you are ready.');
+  setResult('emergencyResult', `${$('emergencyPreset').selectedOptions[0].textContent} selected. Preview it before arming takeover.`, 'success');
+}
+
+function previewEmergencySource() {
+  try {
+    const url = normalizeEmergencyUrl($('emergencyUrl').value);
+    $('emergencyUrl').value = url;
+    state.emergency.sourceUrl = url;
+    if (state.emergency.openedWindow && !state.emergency.openedWindow.closed) {
+      state.emergency.openedWindow.location.href = url;
+      state.emergency.openedWindow.focus();
+    } else {
+      state.emergency.openedWindow = window.open(url, '_blank', 'noopener=false');
+    }
+    if (!state.emergency.openedWindow) throw new Error('The browser blocked the preview window. Allow pop-ups for RadioTEDU OnAir and try again');
+    clearEmergencyArm();
+    renderEmergencyStatus();
+    setResult('emergencyResult', 'Preview opened without changing the broadcast. Start playback on that page, then arm takeover.', 'success');
+  } catch (error) {
+    setResult('emergencyResult', errorMessage(error), 'error');
+  }
 }
 
 async function ensureEmergencyStudioOwnership(stationId) {
@@ -1855,8 +1943,12 @@ function renderEmergencyStatus(runtime = state.runtime || {}) {
   $('startEmergencyButton').disabled = live || waiting;
   $('stopEmergencyButton').disabled = !live || state.emergency.stopping;
   $('emergencyUrl').disabled = live || waiting;
-  $('emergencyLofiButton').disabled = live || waiting;
+  $('emergencyPreset').disabled = live || waiting;
+  $('emergencyPresetButton').disabled = live || waiting;
+  $('previewEmergencyButton').disabled = live || waiting;
   document.querySelector('.emergency-panel').classList.toggle('is-live', live);
+  const emergencyNav = document.querySelector('[data-operator-nav="emergency"]');
+  if (emergencyNav) emergencyNav.dataset.live = live ? 'true' : 'false';
 }
 
 async function refreshEmergencyStatus() {
@@ -1896,7 +1988,12 @@ async function startEmergency() {
     const url = normalizeEmergencyUrl($('emergencyUrl').value);
     $('emergencyUrl').value = url;
     state.emergency.sourceUrl = url;
-    state.emergency.openedWindow = window.open(url, '_blank');
+    if (state.emergency.openedWindow && !state.emergency.openedWindow.closed) {
+      state.emergency.openedWindow.focus();
+    } else {
+      state.emergency.openedWindow = window.open(url, '_blank', 'noopener=false');
+    }
+    if (!state.emergency.openedWindow) throw new Error('The browser blocked the source window. Allow pop-ups for RadioTEDU OnAir and try again');
     if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Browser tab-audio sharing is not supported in this browser');
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { displaySurface: 'browser' },
@@ -2261,6 +2358,8 @@ async function controlRadioTEDUService(button) {
     stop: 'STOP SERVICE',
     restart: 'RESTART SERVICE',
     update_database: 'UPDATE DATABASE',
+    update_repository: 'UPDATE REPOSITORY',
+    pull_model: 'INSTALL MODEL',
   };
   const key = `${serviceId}:${action}`;
   const now = Date.now();
@@ -2284,9 +2383,13 @@ async function controlRadioTEDUService(button) {
     const result = await api(`/api/integrations/radiotedu/services/${encodeURIComponent(serviceId)}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, confirmation: confirmations[action] }),
-      timeoutMs: action === 'update_database' ? 900000 : 60000,
-      idempotent: action !== 'update_database',
+      body: JSON.stringify({
+        action,
+        confirmation: confirmations[action],
+        model: action === 'pull_model' ? $(serviceControlId(serviceId, 'model'))?.value.trim() || '' : '',
+      }),
+      timeoutMs: ['update_database', 'pull_model'].includes(action) ? 1800000 : action === 'update_repository' ? 240000 : 60000,
+      idempotent: !['update_database', 'update_repository', 'pull_model'].includes(action),
     });
     state.radioteduServices.status = result.status || [];
     renderRadioTEDUServices();
@@ -2383,7 +2486,8 @@ function bindEvents() {
   });
   $('startBroadcastButton').addEventListener('click', startBroadcast);
   $('stopBroadcastButton').addEventListener('click', stopBroadcast);
-  $('emergencyLofiButton').addEventListener('click', useRadioTeduLofiEmergencySource);
+  $('emergencyPresetButton').addEventListener('click', useEmergencyPreset);
+  $('previewEmergencyButton').addEventListener('click', previewEmergencySource);
   $('startEmergencyButton').addEventListener('click', startEmergency);
   $('stopEmergencyButton').addEventListener('click', () => stopEmergency('operator stop'));
   $('enableAiButton').addEventListener('click', () => setAiEnabled(true));
@@ -2448,6 +2552,7 @@ function bindEvents() {
 }
 
 async function boot() {
+  initializeOperatorNavigation();
   bindEvents();
   toggleIcecastFields();
   toggleCurrentOutputFields();

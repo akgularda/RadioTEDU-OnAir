@@ -30,8 +30,10 @@ The product is radio- and genre-agnostic. Every station has an independent ident
 ## Deterministic Operator Wall
 
 The desktop app opens the RTAI wall automatically. In a browser, open `/app`
-after the backend starts. The wall turns every routine operation into a
-visible, verified workflow:
+after the backend starts. A task-based menu separates **On Air**, **Media**,
+**Automation**, **Emergency**, **Services**, **Settings**, and **Diagnostics**;
+the active workspace is remembered. The wall turns every routine operation
+into a visible, verified workflow:
 
 - Start and stop any selected station with read-back verification that persists across restarts.
 - Create, rename, configure, test, and delete stations.
@@ -43,7 +45,7 @@ visible, verified workflow:
 - Enable station-isolated automatic jingles after an operator-selected number of completed songs. The default is every 2 songs, but 1–100 and ordered/random selection are adjustable; the current song always finishes first.
 - Stop a stream without clearing, advancing, or reordering its playlist. The interrupted item stays in place and restarts from its beginning when the operator resumes.
 - Fresh stations remain stopped until an operator presses Start. Restart autostart is a separate, explicit setting and AI can never start, stop, or veto the broadcast.
-- Open an Emergency Room browser page and broadcast only the shared tab audio.
+- Preview an official TRT or custom approved emergency source, then broadcast only the explicitly shared tab audio.
 - See the current song's remaining time plus forecasted start/end times for upcoming songs.
 - Edit Icecast credentials, codec, output gain, and local monitor device.
 - Configure, enable, disable, test, and repair the optional AI host and TTS runtime.
@@ -112,11 +114,23 @@ Use **Exact replacement** for each station library:
 
 Exact replacement deactivates only the selected station's out-of-profile tracks, removes stale pending references, leaves a currently playing song to finish, and refills that station's queue from the verified folder.
 
+### Emergency broadcast
+
+The **Emergency** workspace is independent of `/lofi`. Its built-in presets
+open the official TRT Radyo 1, TRT FM, or TRT Radyo Haber page; an operator may
+instead enter any approved HTTP/HTTPS public-service source. **Open and
+preview** never changes the broadcast. The red takeover control requires two
+clicks, then the browser requires the operator to choose the opened tab and
+enable tab-audio sharing. OnAir verifies incoming audio frames before declaring
+the takeover live. Stop, tab closure, loss of the shared audio track, or a
+failed start restores the saved playlist mix.
+
 ### RadioTEDU service control
 
-**Settings → RadioTEDU Services** is the local control plane for the related
+**Services** is the local control plane for the related
 RadioTEDU systems:
 
+- Ollama: detected local model runtime, installed-model health, guarded runtime control, and fixed model installation
 - RadioTEDU AI Radio: Shared AI and the independent EN/FR broadcast supervisor
 - RadioTEDU Voting: local voting agent and web backend
 - RadioTEDU Juke: local media agent and web backend
@@ -128,8 +142,10 @@ button, so the complete setup can be performed without typing paths. The wall
 shows source readiness, Git commit
 and local-change state, managed PID state, endpoint latency, and sanitized
 health signals. Operators can check, start, stop, and restart each fixed
-component entirely with the mouse. Start, stop, restart, and database updates
-must be confirmed by a second click within 20 seconds.
+component entirely with the mouse. Clean Git repositories can be updated only
+by a guarded fast-forward; database maintenance always creates its required
+backup first. Start, stop, restart, repository updates, model installation, and
+database updates must be confirmed by a second click within 20 seconds.
 
 The control plane never accepts an arbitrary command and never reads a secret
 into browser settings. Credentials remain in the protected external
@@ -149,8 +165,9 @@ count, and migration count; no credential or database URL is stored there.
 
 For an authorized RadioTEDU broadcast computer,
 `tools/provision_rtmd_integrations.py` imports the private machine handoff into
-ACL-protected files under `C:\ProgramData\RadioTEDU`, pins the six service cards
-to the checked-out repositories, and leaves every autostart switch off. The
+ACL-protected files under `C:\ProgramData\RadioTEDU`, pins the six repository
+service cards to the checked-out repositories, exposes the detected local
+Ollama runtime as a seventh card, and leaves every autostart switch off. The
 script prints only a count and never prints credentials. Machine-specific
 `.env` files, the private handoff, databases, media, and generated secrets must
 never be added to Git. Operators can review paths and health from the dashboard

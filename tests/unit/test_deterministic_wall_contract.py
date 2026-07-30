@@ -31,6 +31,9 @@ def test_operator_wall_exposes_every_self_service_control():
         "repairDependenciesButton",
         "passwordForm",
         "startEmergencyButton",
+        "emergencyPreset",
+        "previewEmergencyButton",
+        "operatorNavigation",
         "timelineRemaining",
         "forecastList",
     }
@@ -60,9 +63,14 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "setCleanValue('sweeperMode'" in javascript
     assert "settings.library_active_files" in javascript
     assert "serviceControlState" in javascript
-    assert "https://stream.radiotedu.com/lofi" in javascript
+    html = (WALL / "index.html").read_text(encoding="utf-8")
+    assert "https://radyo.trt.net.tr/kanallar/radyo-1" in html
+    assert "https://stream.radiotedu.com/lofi" not in html
+    assert "activateOperatorView" in javascript
+    assert "pull_model" in javascript
+    assert "update_repository" in javascript
     assert "/api/operator/pick-file" in javascript
     assert "data-service-path=" in javascript
     assert "database.last_update_at" in javascript
-    assert "Stop stream — keep playlist" in (WALL / "index.html").read_text(encoding="utf-8")
-    assert "AI is content-only" in (WALL / "index.html").read_text(encoding="utf-8")
+    assert "Stop stream — keep playlist" in html
+    assert "AI is content-only" in html

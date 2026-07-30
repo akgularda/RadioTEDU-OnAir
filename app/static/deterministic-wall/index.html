@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#101114">
   <meta name="description" content="Deterministic RTAI automation wall for any radio station">
   <title>RadioTEDU OnAir</title>
-  <link rel="stylesheet" href="/static/deterministic-wall/styles.css?v=9">
+  <link rel="stylesheet" href="/static/deterministic-wall/styles.css?v=10">
 </head>
 <body>
   <div id="authGate" class="auth-gate" hidden>
@@ -54,9 +54,33 @@
       </div>
     </header>
 
-    <main>
-      <section class="hero-grid rtai-hero">
-        <article class="status-card onair-card">
+    <div class="operator-workspace">
+      <aside class="operator-sidebar" aria-label="Operator menu">
+        <nav id="operatorNavigation" class="operator-navigation">
+          <button class="operator-nav-button" type="button" data-operator-nav="onair"><span class="nav-icon" aria-hidden="true">●</span><span><b>On Air</b><small>Broadcast and timeline</small></span></button>
+          <button class="operator-nav-button" type="button" data-operator-nav="media"><span class="nav-icon" aria-hidden="true">♪</span><span><b>Media</b><small>Library and queue</small></span></button>
+          <button class="operator-nav-button" type="button" data-operator-nav="automation"><span class="nav-icon" aria-hidden="true">↻</span><span><b>Automation</b><small>Jingles and rules</small></span></button>
+          <button class="operator-nav-button emergency-nav" type="button" data-operator-nav="emergency"><span class="nav-icon" aria-hidden="true">!</span><span><b>Emergency</b><small>External live source</small></span></button>
+          <button class="operator-nav-button" type="button" data-operator-nav="services"><span class="nav-icon" aria-hidden="true">◆</span><span><b>Services</b><small>Ollama, AI, Voting, Juke</small></span></button>
+          <button class="operator-nav-button" type="button" data-operator-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span><b>Settings</b><small>Station and account</small></span></button>
+          <button class="operator-nav-button" type="button" data-operator-nav="diagnostics"><span class="nav-icon" aria-hidden="true">✓</span><span><b>Diagnostics</b><small>Readiness and activity</small></span></button>
+        </nav>
+        <div class="sidebar-rule"></div>
+        <div class="sidebar-principle"><b>Operator controlled</b><span>Normal broadcasting never depends on AI.</span></div>
+      </aside>
+
+      <main id="operatorMain" class="operator-main">
+        <header class="workspace-heading">
+          <div>
+            <div id="workspaceEyebrow" class="eyebrow">LIVE CONTROL</div>
+            <h2 id="workspaceTitle" tabindex="-1">On Air</h2>
+            <p id="workspaceDescription">Control the active broadcast and see what plays next.</p>
+          </div>
+          <span id="workspaceStation" class="workspace-station">Active station</span>
+        </header>
+
+      <section class="hero-grid rtai-hero view-fragment-grid">
+        <article class="status-card onair-card" data-operator-view="onair">
           <div class="card-heading">
             <div>
               <div class="eyebrow">BROADCAST</div>
@@ -84,7 +108,7 @@
           <p id="broadcastResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="status-card ai-card">
+        <article class="status-card ai-card" data-operator-view="services">
           <div class="card-heading">
             <div>
               <div class="eyebrow">AI HOST</div>
@@ -105,7 +129,7 @@
           <p id="aiResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="status-card station-card">
+        <article class="status-card station-card" data-operator-view="settings">
           <div class="card-heading">
             <div>
               <div class="eyebrow">STATIONS</div>
@@ -134,18 +158,29 @@
         </article>
       </section>
 
-      <section class="operations-grid">
-        <article class="panel emergency-panel">
+      <section class="operations-grid view-fragment-grid">
+        <article class="panel emergency-panel" data-operator-view="emergency">
           <div class="panel-heading">
-            <div><div class="eyebrow emergency-eyebrow">EMERGENCY ROOM</div><h2>Any-page audio takeover</h2></div>
+            <div><div class="eyebrow emergency-eyebrow">EMERGENCY BROADCAST</div><h2>External public-service source</h2></div>
             <div id="emergencyLamp" class="status-lamp off"><span></span><b>OFF</b></div>
           </div>
-          <p class="card-copy">Broadcast any HTTP or HTTPS page that plays sound—public radio, a government emergency feed, a press conference, or RadioTEDU /lofi. This is not tied to YouTube. Video is never transmitted.</p>
-          <div class="path-picker-row emergency-url-row">
-            <label>Web page URL<input id="emergencyUrl" type="url" inputmode="url" placeholder="https://example.org/live-radio" autocomplete="url"></label>
-            <button id="emergencyLofiButton" class="button secondary" type="button">Use RadioTEDU /lofi</button>
+          <p class="card-copy">Take over the selected station with an official public radio, government feed, press conference, or any approved HTTP/HTTPS page. Only shared audio is transmitted; video is never sent.</p>
+          <div class="emergency-preset-row">
+            <label>Verified public-service preset
+              <select id="emergencyPreset">
+                <option value="">Custom source</option>
+                <option value="https://radyo.trt.net.tr/kanallar/radyo-1">TRT Radyo 1</option>
+                <option value="https://radyo.trt.net.tr/kanallar/trt-fm">TRT FM</option>
+                <option value="https://radyo.trt.net.tr/kanallar/trt-radyo-haber">TRT Radyo Haber</option>
+              </select>
+            </label>
+            <button id="emergencyPresetButton" class="button secondary" type="button">Use selected preset</button>
           </div>
-          <div class="emergency-instruction"><b>The browser will ask what to share.</b><span>Select the page that just opened and turn on <strong>Share tab audio</strong>. The first red-button press arms takeover; the second press confirms it.</span></div>
+          <div class="path-picker-row emergency-url-row">
+            <label>Official page or approved source URL<input id="emergencyUrl" type="url" inputmode="url" placeholder="https://radyo.trt.net.tr/kanallar/radyo-1" autocomplete="url"></label>
+            <button id="previewEmergencyButton" class="button secondary" type="button">Open and preview</button>
+          </div>
+          <div class="emergency-instruction"><b>Preview first; takeover is separate.</b><span>On confirmation, select the opened source tab and turn on <strong>Share tab audio</strong>. The first red-button press arms takeover; the second press confirms it.</span></div>
           <div class="state-strip emergency-states">
             <div><span>Program</span><b id="emergencyProgramState">Normal</b></div>
             <div><span>Tab signal</span><b id="emergencySignalState">Off</b></div>
@@ -159,7 +194,7 @@
           <p id="emergencyResult" class="action-result" aria-live="assertive"></p>
         </article>
 
-        <article class="panel timeline-panel">
+        <article class="panel timeline-panel" data-operator-view="onair">
           <div class="panel-heading">
             <div><div class="eyebrow">LIVE TIMELINE</div><h2>Remaining and forecasted songs</h2></div>
             <div id="timelineClock" class="mini-state">--:--:--</div>
@@ -181,7 +216,7 @@
         </article>
       </section>
 
-      <section class="library-management-grid">
+      <section class="library-management-grid" data-operator-view="media">
         <article class="panel library-profile-panel">
           <div class="panel-heading">
             <div><div class="eyebrow">STATION LIBRARY</div><h2>Managed music folder</h2></div>
@@ -209,8 +244,8 @@
         </article>
       </section>
 
-      <section class="configuration-grid">
-        <article class="panel configuration-panel">
+      <section class="configuration-grid view-fragment-grid">
+        <article class="panel configuration-panel output-configuration-panel" data-operator-view="settings">
           <div class="panel-heading">
             <div><div class="eyebrow">CURRENT STATION</div><h2>Identity and broadcast output</h2></div>
             <div id="outputConfigState" class="mini-state">Loading</div>
@@ -241,7 +276,7 @@
           <div class="danger-zone"><button id="deleteStationButton" class="button danger compact" type="button">Delete this station</button></div>
         </article>
 
-        <article class="panel configuration-panel">
+        <article class="panel configuration-panel" data-operator-view="services">
           <div class="panel-heading">
             <div><div class="eyebrow">AI HOST</div><h2>Complete AI configuration</h2></div>
             <div id="aiConfigState" class="mini-state">Loading</div>
@@ -250,7 +285,7 @@
           <form id="aiConfigForm" class="operator-form">
             <label class="switch-row"><span><b>Enable AI host</b><small>Generate station voice and music introductions</small></span><input id="aiConfigEnabled" type="checkbox"></label>
             <div class="field-grid two">
-              <label>Language model<input id="aiLlmModel" required></label>
+              <label>Language model<input id="aiLlmModel" required placeholder="ollama:qwen2.5:0.5b"><small>Use <code>ollama:model-name</code> for the local Ollama runtime.</small></label>
               <label>Voice provider<select id="aiTtsProvider"><option value="local-qwen-tts">Local Qwen TTS</option><option value="edge-tts">Edge TTS</option><option value="omnivoice">OmniVoice</option></select></label>
               <label>Voice persona<select id="aiVoicePersona"><option value="auto">Automatic</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option><option value="evening">Evening</option><option value="night">Night</option><option value="warm_radio_host">Warm radio host</option><option value="professional_announcer">Professional announcer</option></select></label>
               <label>TTS model path<input id="aiTtsModelPath" placeholder="Optional for managed local runtime"></label>
@@ -270,7 +305,7 @@
           <p id="aiConfigResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="panel configuration-panel">
+        <article class="panel configuration-panel" data-operator-view="services">
           <div class="panel-heading">
             <div><div class="eyebrow">RADIOTEDU SERVICES</div><h2>Adapters and managed services</h2></div>
             <div id="integrationState" class="mini-state">Loading</div>
@@ -309,7 +344,7 @@
           <p id="serviceControlResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="panel configuration-panel readiness-panel">
+        <article class="panel configuration-panel readiness-panel" data-operator-view="diagnostics">
           <div class="panel-heading">
             <div><div class="eyebrow">READINESS</div><h2>Installation self-check</h2></div>
             <div id="readinessState" class="mini-state">Checking</div>
@@ -323,7 +358,7 @@
           <p id="readinessResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="panel configuration-panel account-panel">
+        <article class="panel configuration-panel account-panel" data-operator-view="settings">
           <div class="panel-heading"><div><div class="eyebrow">ACCOUNT</div><h2>Change operator password</h2></div></div>
           <p class="card-copy">Change your own password here. Existing sessions are revoked after a successful change, then you sign in again with the new password.</p>
           <form id="passwordForm" class="operator-form account-form">
@@ -338,7 +373,7 @@
         </article>
       </section>
 
-      <section class="workspace-grid">
+      <section class="workspace-grid" data-operator-view="media">
         <article class="panel queue-panel">
           <div class="panel-heading">
             <div><div class="eyebrow">PLAYOUT</div><h2>Broadcast queue</h2></div>
@@ -368,8 +403,8 @@
         </article>
       </section>
 
-      <section class="jingle-grid">
-        <article class="panel">
+      <section class="jingle-grid view-fragment-grid">
+        <article class="panel" data-operator-view="automation">
           <div class="panel-heading"><div><div class="eyebrow">JINGLES</div><h2>Upload a jingle</h2></div><span id="jingleCount" class="count-badge">0</span></div>
           <form id="jingleUploadForm" class="upload-form">
             <label class="file-drop">Audio files<input id="jingleFiles" type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac" multiple required><span id="jingleFileLabel">Choose one or more jingle files</span></label>
@@ -384,7 +419,7 @@
           <div id="jingleList" class="jingle-list"></div>
         </article>
 
-        <article class="panel">
+        <article class="panel" data-operator-view="automation">
           <div class="panel-heading"><div><div class="eyebrow">AUTOMATION</div><h2>Automatic jingles</h2></div><div id="sweeperLamp" class="mini-state">—</div></div>
           <form id="sweeperForm" class="sweeper-form">
             <label class="switch-row"><span><b>Insert jingles automatically</b><small>Cycles only this station's jingles after a song finishes</small></span><input id="sweeperEnabled" type="checkbox"></label>
@@ -401,16 +436,17 @@
           <p id="sweeperResult" class="action-result" aria-live="polite"></p>
         </article>
 
-        <article class="panel activity-panel">
+        <article class="panel activity-panel" data-operator-view="diagnostics">
           <div class="panel-heading"><div><div class="eyebrow">CONFIRMATION</div><h2>Operator activity</h2></div><button id="clearActivityButton" class="button ghost compact" type="button">Clear</button></div>
           <ol id="activityList" class="activity-list"></ol>
         </article>
       </section>
-    </main>
+      </main>
+    </div>
   </div>
 
   <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><span class="spinner"></span><b id="busyTitle">Working…</b><small id="busyDetail">Waiting for verified state</small></div></div>
   <div id="toastRegion" class="toast-region" aria-live="assertive"></div>
-    <script src="/static/deterministic-wall/app.js?v=16" defer></script>
+    <script src="/static/deterministic-wall/app.js?v=17" defer></script>
 </body>
 </html>

@@ -127,6 +127,103 @@ def test_database_action_is_never_available_for_agents(tmp_path):
     assert exc.value.detail == "database_update_not_supported"
 
 
+def test_ollama_is_first_class_but_optional(tmp_path, monkeypatch):
+    executable = tmp_path / "ollama.exe"
+    executable.write_bytes(b"fixed-test-runtime")
+    monkeypatch.setattr(control, "_ollama_executable", lambda: executable)
+    settings = _settings(tmp_path)
+    settings["ollama_runtime"]["enabled"] = True
+
+    status = control.service_status(
+        "ollama_runtime",
+        settings,
+        include_health=False,
+    )
+
+    assert status["source"]["ready"] is True
+    assert status["config_ready"] is True
+    assert status["state"] == "ready"
+    assert control.SERVICE_DEFINITIONS["ollama_runtime"]["kind"] == "ollama"
+
+
+def test_ollama_model_install_is_fixed_and_validated(tmp_path, monkeypatch):
+    executable = tmp_path / "ollama.exe"
+    executable.write_bytes(b"fixed-test-runtime")
+    calls = []
+    monkeypatch.setattr(control, "_ollama_executable", lambda: executable)
+    monkeypatch.setattr(
+        control.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+    settings = _settings(tmp_path)
+
+    result = control.perform_action(
+        "ollama_runtime",
+        "pull_model",
+        "INSTALL MODEL",
+        settings,
+        "qwen2.5:0.5b",
+    )
+
+    assert result == {
+        "ok": True,
+        "action": "pull_model",
+        "model": "qwen2.5:0.5b",
+    }
+    assert calls == [[str(executable), "pull", "qwen2.5:0.5b"]]
+    with pytest.raises(HTTPException) as exc:
+        control.perform_action(
+            "ollama_runtime",
+            "pull_model",
+            "INSTALL MODEL",
+            settings,
+            "qwen2.5:0.5b; remove-everything",
+        )
+    assert exc.value.detail == "invalid_ollama_model"
+
+
+def test_repository_update_requires_clean_fast_forward(tmp_path, monkeypatch):
+    source = tmp_path / "repository"
+    (source / ".git").mkdir(parents=True)
+    settings = _settings(tmp_path)
+    settings["voting_backend"]["source_dir"] = str(source)
+    commits = iter(("before", "after"))
+    monkeypatch.setattr(
+        control,
+        "_source_status",
+        lambda service_id, config: {
+            "configured": True,
+            "ready": True,
+            "commit": next(commits),
+            "dirty": False,
+            "missing": [],
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "_tracked_process",
+        lambda service_id: ("stopped", None),
+    )
+    calls = []
+    monkeypatch.setattr(
+        control.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+
+    result = control.perform_action(
+        "voting_backend",
+        "update_repository",
+        "UPDATE REPOSITORY",
+        settings,
+    )
+
+    assert result["changed"] is True
+    assert result["commit"] == "after"
+    assert [command[3] for command in calls] == ["fetch", "merge"]
+
+
 def test_postgres_database_update_creates_backup_and_persists_health_history(
     tmp_path, monkeypatch
 ):

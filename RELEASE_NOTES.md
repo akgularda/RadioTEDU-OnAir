@@ -19,6 +19,10 @@
 - Enabled desktop shortcut creation by default in the RadioTEDU OnAir installer.
 - Added WebView2 and Ollama prerequisite bootstrap plus app-managed optional Python/Qwen payload repair hooks.
 - Added release artifact and smoke validation structure for GitHub Releases.
+- Replaced the single scrolling wall with persistent task-based On Air, Media, Automation, Emergency, Services, Settings, and Diagnostics workspaces.
+- Replaced the emergency `/lofi` shortcut with previewable official TRT Radyo 1, TRT FM, and TRT Radyo Haber presets plus an approved custom-source workflow.
+- Added Ollama as a first-class optional service with local install detection, model visibility, guarded runtime control, and fixed model installation.
+- Added guarded, clean-tree, fast-forward-only repository updates for RadioTEDU AI, Voting, and Juke components while retaining backup-first database maintenance.
 
 ## Release Checklist
 

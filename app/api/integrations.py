@@ -64,6 +64,7 @@ class RadioTEDUServiceSettingsUpdate(BaseModel):
 class RadioTEDUServiceAction(BaseModel):
     action: str = Field(min_length=1, max_length=40)
     confirmation: str = Field(default="", max_length=80)
+    model: str = Field(default="", max_length=120)
 
 
 def _truthy(raw, default: bool = False) -> bool:
@@ -359,6 +360,7 @@ def control_radiotedu_service(
         payload.action,
         payload.confirmation,
         settings,
+        payload.model,
     )
     return {
         **result,
