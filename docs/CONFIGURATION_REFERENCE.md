@@ -86,6 +86,13 @@ operator must select a device, verify the meter, and explicitly take it live.
 | `MAX_LOCAL_OUTPUTS` | `4` | Maximum simultaneous local output devices. |
 | `MAX_OPERATION_LOG_ROWS` | `50000` | Retained operation log rows. |
 | `MAX_EVENT_ROWS` | `20000` | Retained event rows. |
+| `RADIOTEDU_SCHEMA_BACKUP_RETENTION` | `8` | Verified pre-migration SQLite backups retained per database; values are clamped to `1`–`64`. |
+
+Before an existing SQLite database receives a pending schema/bootstrap change,
+OnAir creates and verifies an online backup under `schema-backups` beside the
+database and records it in `schema-migration-backups.json`. A backup, integrity,
+or ledger failure blocks the migration before schema writes occur. Fresh or
+already-current databases do not create redundant backups.
 
 ## Optional AI variables
 

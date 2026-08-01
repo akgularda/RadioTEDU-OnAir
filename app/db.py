@@ -1,9 +1,12 @@
+import json
 import os
 import secrets
 import shutil
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from app.config import get_data_root, get_db_path
 from app.auth.permissions import GLOBAL_PERMISSION_KEYS, SHOW_PERMISSION_KEYS
@@ -14,6 +17,9 @@ _HEALTH_LOCK = threading.Lock()
 _HEALTH_CACHE: dict[str, object] = {"checked_at": 0.0, "path": "", "value": {}}
 _SCHEMA_BOOTSTRAP_KEY = "__schema_bootstrapped__"
 _LEGACY_RBAC_MIGRATION_KEY = "__legacy_rbac_seeded__"
+_SCHEMA_BACKUP_DIRECTORY = "schema-backups"
+_SCHEMA_BACKUP_LEDGER = "schema-migration-backups.json"
+_DEFAULT_SCHEMA_BACKUP_RETENTION = 8
 
 _LEGACY_ROLE_TEMPLATE_PERMISSIONS = {
     "Legacy Admin": set(GLOBAL_PERMISSION_KEYS),
@@ -863,6 +869,172 @@ def _backfill_default_studios(cur) -> None:
         )
 
 
+def _schema_backup_directory(db_path: Path) -> Path:
+    return db_path.parent / _SCHEMA_BACKUP_DIRECTORY
+
+
+def _schema_backup_ledger_path(db_path: Path) -> Path:
+    return db_path.parent / _SCHEMA_BACKUP_LEDGER
+
+
+def _schema_backup_retention() -> int:
+    raw = os.getenv(
+        "RADIOTEDU_SCHEMA_BACKUP_RETENTION",
+        str(_DEFAULT_SCHEMA_BACKUP_RETENTION),
+    )
+    try:
+        return max(1, min(64, int(raw)))
+    except (TypeError, ValueError):
+        return _DEFAULT_SCHEMA_BACKUP_RETENTION
+
+
+def _fsync_path(path: Path) -> None:
+    # Windows requires a writable descriptor for FlushFileBuffers/fsync.
+    with path.open("r+b") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory sync; Windows does not allow opening directories."""
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _read_schema_backup_ledger(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError("schema backup ledger is unreadable") from exc
+    records = payload.get("records") if isinstance(payload, dict) else None
+    if not isinstance(records, list) or not all(
+        isinstance(record, dict) for record in records
+    ):
+        raise RuntimeError("schema backup ledger is invalid")
+    return [dict(record) for record in records]
+
+
+def _write_schema_backup_ledger(path: Path, records: list[dict[str, object]]) -> None:
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    payload = json.dumps({"version": 1, "records": records}, indent=2, sort_keys=True)
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _record_schema_backup(db_path: Path, backup_path: Path) -> None:
+    ledger_path = _schema_backup_ledger_path(db_path)
+    backup_directory = _schema_backup_directory(db_path).resolve()
+    database_key = str(db_path.resolve())
+    records = _read_schema_backup_ledger(ledger_path)
+    records.append(
+        {
+            "backup_path": str(backup_path.resolve()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "database_path": database_key,
+            "schema_version": _SCHEMA_VERSION,
+            "size_bytes": int(backup_path.stat().st_size),
+        }
+    )
+
+    matching = [record for record in records if record.get("database_path") == database_key]
+    retained_matching = matching[-_schema_backup_retention() :]
+    retained_ids = {id(record) for record in retained_matching}
+    removed = [
+        record
+        for record in matching
+        if id(record) not in retained_ids
+    ]
+    retained = [
+        record
+        for record in records
+        if record.get("database_path") != database_key or id(record) in retained_ids
+    ]
+    _write_schema_backup_ledger(ledger_path, retained)
+
+    for record in removed:
+        candidate = Path(str(record.get("backup_path") or ""))
+        try:
+            if candidate.resolve().parent == backup_directory:
+                candidate.unlink(missing_ok=True)
+        except (OSError, RuntimeError):
+            # The durable ledger has already advanced. A later migration can retry
+            # housekeeping without putting schema safety at risk.
+            continue
+
+
+def _backup_database_before_schema_migration(db_path: Path) -> Path:
+    """Create an atomic, integrity-checked SQLite backup before schema writes."""
+    if not db_path.is_file() or db_path.stat().st_size <= 0:
+        raise RuntimeError("refusing to back up a missing or empty existing database")
+
+    backup_directory = _schema_backup_directory(db_path)
+    backup_directory.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_path = backup_directory / (
+        f"{db_path.stem}.before-schema-v{_SCHEMA_VERSION}-{timestamp}-{secrets.token_hex(4)}"
+        f"{db_path.suffix or '.sqlite3'}"
+    )
+    temporary_path = backup_path.with_name(f".{backup_path.name}.tmp")
+    source = None
+    destination = None
+    published = False
+    try:
+        source = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+        source_check = source.execute("PRAGMA quick_check(1)").fetchone()
+        if str(source_check[0] if source_check else "").lower() != "ok":
+            raise sqlite3.DatabaseError("source database integrity check failed")
+
+        destination = sqlite3.connect(str(temporary_path))
+        source.backup(destination)
+        destination.commit()
+        backup_check = destination.execute("PRAGMA quick_check(1)").fetchone()
+        if str(backup_check[0] if backup_check else "").lower() != "ok":
+            raise sqlite3.DatabaseError("schema backup integrity check failed")
+        destination.close()
+        destination = None
+        source.close()
+        source = None
+
+        if not temporary_path.is_file() or temporary_path.stat().st_size <= 0:
+            raise RuntimeError("schema backup was not written")
+        _fsync_path(temporary_path)
+        os.replace(temporary_path, backup_path)
+        published = True
+        _fsync_directory(backup_directory)
+        _record_schema_backup(db_path, backup_path)
+        return backup_path
+    finally:
+        if destination is not None:
+            destination.close()
+        if source is not None:
+            source.close()
+        if not published:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def get_connection():
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1328,6 +1500,8 @@ def init_db():
     # Endpoints call init_db() frequently; only the first successful bootstrap
     # should perform schema/data writes. Later calls must stay read-only.
     with _INIT_LOCK:
+        db_path = get_db_path()
+        existing_database = db_path.is_file() and db_path.stat().st_size > 0
         conn = get_connection()
         try:
             cur = conn.cursor()
@@ -1343,6 +1517,8 @@ def init_db():
             ):
                 return
 
+            if existing_database:
+                _backup_database_before_schema_migration(db_path)
             _bootstrap_schema(cur)
             _ensure_default_admin(cur)
             _ensure_default_station(cur)

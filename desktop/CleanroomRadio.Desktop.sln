@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CleanroomRadio.Agent", "src
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CleanroomRadio.Shell", "src\CleanroomRadio.Shell\CleanroomRadio.Shell.csproj", "{D34707C5-FEAA-49D2-AAB6-E6B413CF9D4D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CleanroomRadio.ServiceHost", "src\CleanroomRadio.ServiceHost\CleanroomRadio.ServiceHost.csproj", "{7A1D6058-793A-42CB-89F6-1B35EB8925C1}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CleanroomRadio.Desktop.Tests", "tests\CleanroomRadio.Desktop.Tests\CleanroomRadio.Desktop.Tests.csproj", "{E48B6E5C-9B4A-4E7B-8A0C-1CE7E0F4E6C3}"
 EndProject
 Global
@@ -28,6 +30,10 @@ Global
 		{D34707C5-FEAA-49D2-AAB6-E6B413CF9D4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D34707C5-FEAA-49D2-AAB6-E6B413CF9D4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D34707C5-FEAA-49D2-AAB6-E6B413CF9D4D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A1D6058-793A-42CB-89F6-1B35EB8925C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A1D6058-793A-42CB-89F6-1B35EB8925C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A1D6058-793A-42CB-89F6-1B35EB8925C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A1D6058-793A-42CB-89F6-1B35EB8925C1}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E48B6E5C-9B4A-4E7B-8A0C-1CE7E0F4E6C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E48B6E5C-9B4A-4E7B-8A0C-1CE7E0F4E6C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E48B6E5C-9B4A-4E7B-8A0C-1CE7E0F4E6C3}.Release|Any CPU.ActiveCfg = Release|Any CPU

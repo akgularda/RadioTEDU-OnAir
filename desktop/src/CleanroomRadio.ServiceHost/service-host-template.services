@@ -1,0 +1,5 @@
+# One child per line: id|executable-path|arguments|working-directory|restart-on-exit
+# Every valid row starts once. Set restart-on-exit to true for bounded restart, false for one-shot execution.
+# Arguments are intentionally never written to host logs or state files.
+# Inline token/password/secret/api-key flags and URLs with userinfo are rejected. Use a protected config-file reference instead.
+# Add actual, existing paths before registering a Windows service.

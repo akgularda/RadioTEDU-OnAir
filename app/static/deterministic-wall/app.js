@@ -41,6 +41,8 @@ const state = {
   refreshTimer: null,
   timelineTimer: null,
   timelineAnchorAt: 0,
+  startArmedUntil: 0,
+  startArmTimer: null,
   stopArmedUntil: 0,
   stopArmTimer: null,
   stationDeleteArmedUntil: 0,
@@ -787,6 +789,7 @@ function syncActionButtons() {
   const running = Boolean(state.health?.engine_running && runtime.running && runtime.output_feed_active);
   const stationReady = Number(state.stationId || 0) > 0;
   $('startBroadcastButton').disabled = !stationReady || (running && loop.running);
+  $('startBroadcastButton').textContent = state.startArmedUntil > Date.now() ? 'Confirm start broadcast' : 'Start broadcast';
   $('stopBroadcastButton').disabled = !stationReady || (!running && !loop.running);
   $('stopBroadcastButton').textContent = state.stopArmedUntil > Date.now() ? 'Confirm stop — keep playlist' : 'Stop stream — keep playlist';
   const aiEnabled = asBool(state.ai?.ai_host_enabled);
@@ -796,6 +799,13 @@ function syncActionButtons() {
   if ($('deleteStationButton')) $('deleteStationButton').disabled = state.stations.length <= 1;
   $('libraryPrev').disabled = state.libraryPage <= 1;
   $('libraryNext').disabled = state.libraryPage >= state.libraryPages;
+}
+
+function disarmStartBroadcast() {
+  state.startArmedUntil = 0;
+  if (state.startArmTimer) window.clearTimeout(state.startArmTimer);
+  state.startArmTimer = null;
+  $('startBroadcastButton').textContent = 'Start broadcast';
 }
 
 function disarmStopBroadcast() {
@@ -1093,6 +1103,18 @@ async function updateBroadcastAutostartFromControl() {
 }
 
 async function startBroadcast() {
+  if (state.startArmedUntil <= Date.now()) {
+    state.startArmedUntil = Date.now() + 20000;
+    $('startBroadcastButton').textContent = 'Confirm start broadcast';
+    setResult('broadcastResult', `Click “Confirm start broadcast” within 20 seconds to take ${selectedStationName()} on air.`);
+    state.startArmTimer = window.setTimeout(() => {
+      disarmStartBroadcast();
+      setResult('broadcastResult', 'Start confirmation expired; nothing was changed.');
+    }, 20000);
+    return;
+  }
+  disarmStartBroadcast();
+  disarmStopBroadcast();
   const resumeAfterRestart = $('broadcastAutostartEnabled').checked;
   setBusy(true, 'Starting broadcast…', 'Starting scheduler and verifying live output');
   setResult('broadcastResult');
@@ -1150,6 +1172,7 @@ async function startBroadcast() {
 
 async function stopBroadcast() {
   if (state.stopArmedUntil <= Date.now()) {
+    disarmStartBroadcast();
     state.stopArmedUntil = Date.now() + 20000;
     $('stopBroadcastButton').textContent = 'Confirm stop — keep playlist';
     setResult('broadcastResult', `Click “Confirm stop — keep playlist” within 20 seconds to stop ${selectedStationName()} without clearing or advancing its queue.`);
@@ -2516,6 +2539,7 @@ function bindEvents() {
   $('queueRefreshButton').addEventListener('click', () => loadQueue().catch((error) => toast(errorMessage(error), 'error')));
   $('stationSelect').addEventListener('change', async () => {
     if (state.emergency.active || state.emergency.starting) await stopEmergency('station changed');
+    disarmStartBroadcast();
     disarmStopBroadcast();
     disarmStationDelete();
     clearFormDirty([

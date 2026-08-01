@@ -17,5 +17,6 @@
     <ProjectReference Include="../../src/CleanroomRadio.Desktop.Common/CleanroomRadio.Desktop.Common.csproj" />
     <ProjectReference Include="../../src/CleanroomRadio.Agent/CleanroomRadio.Agent.csproj" />
     <ProjectReference Include="../../src/CleanroomRadio.Shell/CleanroomRadio.Shell.csproj" />
+    <ProjectReference Include="../../src/CleanroomRadio.ServiceHost/CleanroomRadio.ServiceHost.csproj" />
   </ItemGroup>
 </Project>

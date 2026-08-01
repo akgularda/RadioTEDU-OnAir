@@ -47,6 +47,7 @@ Source: "..\dist\desktop\shell\*"; DestDir: "{app}\shell"; Flags: ignoreversion 
 Source: "..\LICENSE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "EnsureDesktopPrerequisites.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "HardenServiceHostAcl.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "..\release\prerequisites\OllamaSetup.exe"; DestDir: "{app}\installer"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\release\prerequisites\windowsdesktop-runtime-win-x64.exe"; DestDir: "{app}\installer"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\release\prerequisites\ollama.exe"; DestDir: "{app}\prerequisites"; Flags: ignoreversion skipifsourcedoesntexist
@@ -65,6 +66,9 @@ Name: "{commonappdata}\RadioTEDU\OnAir\Media\Advertisements"; Permissions: users
 Name: "{commonappdata}\RadioTEDU\OnAir\Media\Recorded Shows"; Permissions: users-modify; Flags: uninsneveruninstall
 Name: "{commonappdata}\RadioTEDU\OnAir\Logs"; Permissions: users-modify; Flags: uninsneveruninstall
 Name: "{commonappdata}\RadioTEDU\OnAir\State"; Permissions: users-modify; Flags: uninsneveruninstall
+Name: "{commonappdata}\RadioTEDU\OnAir\Services"; Flags: uninsneveruninstall
+Name: "{commonappdata}\RadioTEDU\OnAir\Logs\ServiceHost"; Flags: uninsneveruninstall
+Name: "{commonappdata}\RadioTEDU\OnAir\State\ServiceHost"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{autodesktop}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: desktopicon
@@ -112,6 +116,35 @@ begin
   end;
 end;
 
+procedure HardenServiceHostDirectories;
+var
+  ResultCode: Integer;
+  PowerShellPath: string;
+  ScriptPath: string;
+  Parameters: string;
+begin
+  PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  ScriptPath := ExpandConstant('{app}\installer\HardenServiceHostAcl.ps1');
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath +
+    '" -OnAirRoot "' + ExpandConstant('{commonappdata}\RadioTEDU\OnAir') + '"';
+
+  if not Exec(
+    PowerShellPath,
+    Parameters,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode) then
+  begin
+    RaiseException('Could not start the service-host ACL hardening helper.');
+  end;
+
+  if ResultCode <> 0 then
+  begin
+    RaiseException('Service-host ACL hardening failed.');
+  end;
+end;
+
 [Messages]
 WelcomeLabel1=Welcome to [name]
 WelcomeLabel2=This installer prepares RadioTEDU OnAir for dependable station operation. Application binaries are installed in Program Files, shared station data remains in ProgramData, and the guided setup verifies Icecast, codecs, microphone readiness, and optional AI services.
@@ -123,6 +156,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    HardenServiceHostDirectories;
     RunDesktopPrerequisites(
       WizardIsTaskSelected('dotnet'),
       WizardIsTaskSelected('ollama'));

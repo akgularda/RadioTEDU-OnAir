@@ -263,11 +263,13 @@ $buildRoot = Join-Path $root "build\desktop"
 $desktopDist = Join-Path $root "dist\desktop"
 $shellPublishDir = Join-Path $buildRoot "shell-publish"
 $agentPublishDir = Join-Path $buildRoot "agent-publish"
+$serviceHostPublishDir = Join-Path $buildRoot "service-host-publish"
 $shellBundleDir = Join-Path $desktopDist "shell"
+$serviceHostBundleDir = Join-Path $desktopDist "service-host"
 
 Reset-Directory -Path $buildRoot
 Reset-Directory -Path $desktopDist
-New-Item -ItemType Directory -Force -Path $shellPublishDir, $agentPublishDir, $shellBundleDir | Out-Null
+New-Item -ItemType Directory -Force -Path $shellPublishDir, $agentPublishDir, $serviceHostPublishDir, $shellBundleDir, $serviceHostBundleDir | Out-Null
 
 $publishModes = @()
 $publishModes += Publish-DesktopProject `
@@ -280,8 +282,14 @@ $publishModes += Publish-DesktopProject `
     -OutputDir $agentPublishDir `
     -DotNetCommand $dotnetCommand
 
+$publishModes += Publish-DesktopProject `
+    -ProjectPath ".\desktop\src\CleanroomRadio.ServiceHost\CleanroomRadio.ServiceHost.csproj" `
+    -OutputDir $serviceHostPublishDir `
+    -DotNetCommand $dotnetCommand
+
 Copy-PublishTree -Source $shellPublishDir -Destination $shellBundleDir
 Copy-PublishTree -Source $agentPublishDir -Destination $desktopDist
+Copy-PublishTree -Source $serviceHostPublishDir -Destination $serviceHostBundleDir
 
 Copy-Item -Path (Join-Path $shellBundleDir "CleanroomRadio.Shell.exe") -Destination (Join-Path $shellBundleDir $ShellExeName) -Force
 Copy-Item -Path (Join-Path $desktopDist "CleanroomRadio.Agent.exe") -Destination (Join-Path $desktopDist $AgentExeName) -Force
@@ -296,4 +304,5 @@ if ($publishModes -contains "framework-dependent") {
 Write-Output "Backend artifact: $backendExe"
 Write-Output "Desktop shell artifact: $(Join-Path $shellBundleDir $ShellExeName)"
 Write-Output "Desktop agent artifact: $(Join-Path $desktopDist $AgentExeName)"
+Write-Output "Service host artifact: $(Join-Path $serviceHostBundleDir 'RadioTEDU-OnAir-ServiceHost.exe')"
 Write-Output "Recorded latest backend path: $lastBuildPathFile"
