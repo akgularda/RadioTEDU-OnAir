@@ -114,6 +114,12 @@ class UnifiedMediaFolderService:
                     "directory": relative.replace("/", "\\"),
                     "exists": self._is_dir(target),
                     "file_count": self._file_count(target),
+                    "generated_count": int((manifest.get("counts", {}).get(view, {}) or {}).get("generated", 0))
+                    if isinstance(manifest, dict)
+                    else 0,
+                    "operator_count": int((manifest.get("counts", {}).get(view, {}) or {}).get("operator", 0))
+                    if isinstance(manifest, dict)
+                    else 0,
                 }
             )
         return {
@@ -155,10 +161,16 @@ class UnifiedMediaFolderService:
             self._mkdir(staging_root, parents=True, exist_ok=False)
             self._mkdir(rollback_root, parents=True, exist_ok=False)
             manifest_entries: list[dict[str, Any]] = []
+            prior_generated = self._previous_generated_destinations()
             for view, specs in source_specs.items():
                 staged_view = staging_root / view
                 self._mkdir(staged_view, parents=True, exist_ok=False)
-                manifest_entries.extend(self._build_staged_view(view, specs, staged_view))
+                generated = self._build_staged_view(view, specs, staged_view)
+                operator = self._carry_operator_files(
+                    view, staged_view, {entry["destination"].casefold() for entry in generated}, prior_generated.get(view, set())
+                )
+                manifest_entries.extend(generated)
+                manifest_entries.extend(operator)
             self._publish_views(run_id, staging_root, rollback_root, source_specs)
         except UnifiedMediaFolderError as exc:
             if staging_root is not None:
@@ -178,6 +190,13 @@ class UnifiedMediaFolderService:
             "root": str(self.root),
             "hardlink_only": True,
             "entries": manifest_entries,
+            "counts": {
+                view: {
+                    "generated": sum(1 for item in manifest_entries if item["view"] == view and item["ownership"] == "generated"),
+                    "operator": sum(1 for item in manifest_entries if item["view"] == view and item["ownership"] == "operator"),
+                }
+                for view in VIEW_DIRECTORIES
+            },
         }
         atomic_write_json(self.manifest_path, manifest)
         self._record_refresh_status(error="", refreshed_at=manifest["published_at"])
@@ -260,15 +279,16 @@ class UnifiedMediaFolderService:
         self, view: str, specs: list[_SourceSpec], staged_view: Path
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
-        destinations: set[Path] = set()
+        destinations: set[str] = set()
         for spec in specs:
             self._assert_same_volume(spec.source)
             for source_file in self._iter_source_files(spec.source):
                 relative = source_file.relative_to(spec.source)
                 target_relative = spec.destination / relative
-                if target_relative in destinations:
+                destination_key = str(target_relative).replace("\\", "/").casefold()
+                if destination_key in destinations:
                     raise UnifiedMediaFolderError("source_map_target_collision")
-                destinations.add(target_relative)
+                destinations.add(destination_key)
                 destination = staged_view / target_relative
                 self._mkdir(destination.parent, parents=True, exist_ok=True)
                 self._assert_same_volume(source_file)
@@ -287,9 +307,52 @@ class UnifiedMediaFolderService:
                         "destination": str(target_relative).replace("\\", "/"),
                         "language": spec.language,
                         "size": int(source_stat.st_size),
+                        "ownership": "generated",
                     }
                 )
         return entries
+
+    def _previous_generated_destinations(self) -> dict[str, set[str]]:
+        manifest = read_json_object(self.manifest_path)
+        result: dict[str, set[str]] = {view: set() for view in VIEW_DIRECTORIES}
+        if not isinstance(manifest, dict):
+            return result
+        for entry in manifest.get("entries", []):
+            if not isinstance(entry, dict) or entry.get("ownership", "generated") != "generated":
+                continue
+            view = entry.get("view")
+            destination = entry.get("destination")
+            if view in result and isinstance(destination, str):
+                result[view].add(destination.replace("\\", "/").casefold())
+        return result
+
+    def _carry_operator_files(
+        self, view: str, staged_view: Path, generated: set[str], prior_generated: set[str]
+    ) -> list[dict[str, Any]]:
+        target = self._resolve_relative(VIEW_DIRECTORIES[view], field="view")
+        carried: list[dict[str, Any]] = []
+        if not self._is_dir(target) or self._is_symlink(target):
+            return carried
+        self._assert_same_volume(target)
+        for operator_file in self._iter_source_files(target):
+            relative = operator_file.relative_to(target)
+            key = str(relative).replace("\\", "/").casefold()
+            if key in prior_generated:
+                continue
+            if key in generated:
+                raise UnifiedMediaFolderError("operator_file_target_collision")
+            destination = staged_view / relative
+            self._mkdir(destination.parent, parents=True, exist_ok=True)
+            self._assert_same_volume(operator_file)
+            try:
+                os.link(self._io_path(operator_file), self._io_path(destination))
+            except OSError as exc:
+                raise UnifiedMediaFolderError("operator_hardlink_publish_failed") from exc
+            source_stat = self._stat(operator_file)
+            if source_stat.st_ino != self._stat(destination).st_ino:
+                raise UnifiedMediaFolderError("operator_hardlink_verification_failed")
+            carried.append({"view": view, "source": str(relative).replace("\\", "/"), "destination": str(relative).replace("\\", "/"), "language": "operator", "size": int(source_stat.st_size), "ownership": "operator"})
+        return carried
 
     def _publish_views(
         self,

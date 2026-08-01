@@ -173,6 +173,7 @@ async def lifespan(_app: FastAPI):
     shutdown_runtime_registry = None
     shutdown_worker_loop_manager = None
     shutdown_library_watcher = None
+    shutdown_product_catalog = None
     bootstrap_summary = bootstrap_dependencies()
     failures = {
         name: details
@@ -187,6 +188,11 @@ async def lifespan(_app: FastAPI):
 
         shutdown_library_watcher = get_managed_library_watcher()
         shutdown_library_watcher.start()
+    if not _env_truthy("CLEANROOM_DISABLE_PRODUCT_CATALOG"):
+        from app.services.product_media_catalog import get_product_media_catalog_service
+
+        shutdown_product_catalog = get_product_media_catalog_service()
+        shutdown_product_catalog.start()
     conn = get_connection()
     try:
         summary = reconcile_all_startup(conn)
@@ -323,6 +329,8 @@ async def lifespan(_app: FastAPI):
         live_mic_registry.reset()
         if shutdown_library_watcher is not None:
             shutdown_library_watcher.stop()
+        if shutdown_product_catalog is not None:
+            shutdown_product_catalog.stop()
         try:
             worker_stop = (
                 shutdown_worker_loop_manager.stop_all()

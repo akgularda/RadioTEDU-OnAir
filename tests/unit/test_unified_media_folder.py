@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import app.api.library_automation as library_automation
+import app.services.unified_media_folder as unified_media_folder
 from app.services.unified_media_folder import (
     LAYOUT_DIRECTORIES,
     UnifiedMediaFolderError,
@@ -80,7 +81,7 @@ def test_fixed_layout_and_hardlink_views_publish_without_media_copies(tmp_path):
     assert status["last_error"] == ""
 
 
-def test_refresh_replaces_view_atomically_and_keeps_a_recoverable_backup(tmp_path):
+def test_refresh_preserves_operator_dropins_and_keeps_a_recoverable_backup(tmp_path):
     root = tmp_path / "RadioTEDU Media"
     service = UnifiedMediaFolderService(root)
     service.ensure_layout()
@@ -106,8 +107,10 @@ def test_refresh_replaces_view_atomically_and_keeps_a_recoverable_backup(tmp_pat
 
     service.refresh()
 
-    assert not old_view_file.exists()
+    assert old_view_file.exists()
     assert (root / "Broadcast" / "new.mp3").read_bytes() == b"new"
+    manifest = json.loads((root / "Manifests" / "unified-media-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counts"]["broadcast"] == {"generated": 1, "operator": 1}
     backups = list((root / "Backups").glob("unified-media-*/broadcast/old.mp3"))
     assert len(backups) == 1
     assert backups[0].read_bytes() == b"old"
@@ -208,6 +211,33 @@ def test_failed_refresh_records_a_safe_operator_error(tmp_path):
     assert status["last_refresh_at"]
     assert status["last_error"] == "source_must_be_relative_and_contained"
     assert "private" not in json.dumps(status)
+
+
+def test_publish_failure_restores_prior_views(tmp_path, monkeypatch):
+    root = tmp_path / "RadioTEDU Media"
+    service = UnifiedMediaFolderService(root)
+    service.ensure_layout()
+    staging = root / "Manifests" / ".unified-media" / "staging" / "rollback-test"
+    rollback = root / "Backups" / "rollback-test"
+    for view, old, new in (("Broadcast", b"old-b", b"new-b"), ("Voting", b"old-v", b"new-v")):
+        (root / view / "track.mp3").write_bytes(old)
+        (staging / {"Broadcast": "broadcast", "Voting": "voting"}[view]).mkdir(parents=True, exist_ok=True)
+        (staging / {"Broadcast": "broadcast", "Voting": "voting"}[view] / "track.mp3").write_bytes(new)
+    rollback.mkdir(parents=True)
+    original_replace = unified_media_folder.os.replace
+    calls = {"count": 0}
+
+    def fail_during_second_view(source, destination):
+        calls["count"] += 1
+        if calls["count"] == 3:
+            raise OSError("simulated publish failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(unified_media_folder.os, "replace", fail_during_second_view)
+    with pytest.raises(UnifiedMediaFolderError, match="atomic_publish_failed"):
+        service._publish_views("rollback-test", staging, rollback, {"broadcast": [], "voting": []})
+    assert (root / "Broadcast" / "track.mp3").read_bytes() == b"old-b"
+    assert (root / "Voting" / "track.mp3").read_bytes() == b"old-v"
 
 
 def test_long_source_and_staged_destination_paths_publish_as_hardlinks(tmp_path):

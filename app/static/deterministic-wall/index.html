@@ -248,12 +248,14 @@
             <div><div class="eyebrow">UNIFIED MEDIA ROOT</div><h2>Hardlink library views</h2></div>
             <div id="unifiedMediaState" class="mini-state">Checking</div>
           </div>
-          <p class="card-copy">The station uses explicit, language-labelled sources to build hardlink-only Broadcast, Juke, Voting, and production-media views. Rebuilding never copies media.</p>
+          <p class="card-copy">The station uses explicit, language-labelled sources to build hardlink-only views. Rebuilding replaces prior mapped links and preserves verified operator drop-ins without copying media.</p>
           <div id="unifiedMediaRoot" class="managed-path">Configured media root is loading…</div>
           <div id="unifiedMediaViews" class="unified-media-views" aria-live="polite"></div>
           <div id="unifiedMediaDetails" class="unified-media-details">No refresh has been recorded.</div>
+          <div class="product-catalog-heading"><b>Automatic product catalogs</b><small>Stable media changes are committed independently after settling.</small></div>
+          <div id="productCatalogRows" class="product-catalog-rows" aria-live="polite"></div>
           <div class="button-row">
-            <button id="refreshUnifiedMediaButton" class="button primary" type="button">Refresh hardlink views and queue library rescan</button>
+            <button id="refreshUnifiedMediaButton" class="button primary" type="button">Refresh mapped views, preserve drop-ins, and queue rescan</button>
           </div>
           <p id="unifiedMediaResult" class="action-result" aria-live="polite"></p>
         </article>

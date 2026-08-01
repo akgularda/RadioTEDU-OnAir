@@ -32,6 +32,14 @@ Updating media: import a new version, give it a new checksum/map entry, refresh
 and verify it, then retire the previous version. Do not overwrite a file that
 may be in a playout queue.
 
+Direct operator drop-ins are also supported in `Broadcast`, `Juke\Non-Turkish`,
+`Voting`, `Jingles`, `Ads`, and `Emergency`. On refresh, only destinations that
+the prior manifest marked as source-map-generated are replaceable. Other regular
+files are verified and carried forward as hardlinks; a collision, symlink,
+reparse point, path escape, or case-fold duplicate blocks the refresh without
+publishing a partial view. Deleting an operator-owned file from its view leaves
+it deleted—it is never reconstructed unless it appears in the source map.
+
 After any map change, use the operator wall’s **Refresh media library** action
 and wait for its completed/success state before scheduling or broadcasting the
 new material. If it fails, keep playout unchanged and correct the map or import

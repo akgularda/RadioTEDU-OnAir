@@ -25,6 +25,7 @@ const state = {
   stationOutput: null,
   libraryWatcher: null,
   unifiedMedia: null,
+  productCatalog: null,
   integrations: null,
   radioteduServices: null,
   serviceActionArmed: {},
@@ -392,7 +393,7 @@ async function loadStations(preferredId = null) {
 
 async function loadCoreStatus() {
   const sid = state.stationId;
-  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher, unifiedMedia] = await Promise.all([
+  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher, unifiedMedia, productCatalog] = await Promise.all([
     api(`/api/health?station_id=${sid}`),
     api(`/api/runtime/${sid}/status`),
     api(`/api/ai/settings?station_id=${sid}`),
@@ -402,6 +403,7 @@ async function loadCoreStatus() {
     api(`/api/stations/output?station_id=${sid}`),
     api('/api/library/watcher/status').catch(() => ({ running: false, profiles: [] })),
     api('/api/library/unified-media/status').catch(() => ({ root: '', views: [], source_map_configured: false, last_error: '' })),
+    api('/api/library/product-catalog/status').catch(() => ({ running: false, products: [] })),
   ]);
   state.health = health;
   state.runtime = runtime;
@@ -412,10 +414,12 @@ async function loadCoreStatus() {
   state.stationOutput = stationOutput || {};
   state.libraryWatcher = libraryWatcher || { running: false, profiles: [] };
   state.unifiedMedia = unifiedMedia || { root: '', views: [], source_map_configured: false, last_error: '' };
+  state.productCatalog = productCatalog || { running: false, products: [] };
   const publicStation = (publicStations.stations || []).find((station) => Number(station.id) === Number(sid));
   renderCoreStatus(publicStation);
   renderLibraryProfile();
   renderUnifiedMedia();
+  renderProductCatalog();
   renderOutputConfiguration();
   renderAiConfiguration();
   renderTimeline();
@@ -870,6 +874,40 @@ function renderUnifiedMedia() {
   $('refreshUnifiedMediaButton').disabled = !configured;
 }
 
+function renderProductCatalog() {
+  const container = $('productCatalogRows');
+  if (!container) return;
+  const payload = state.productCatalog || {};
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  container.innerHTML = products.length
+    ? products.map((product) => {
+      const stateLabel = String(product.state || 'boot_reconcile').replaceAll('_', ' ');
+      const error = String(product.error_code || '').trim();
+      const detail = error
+        ? `Error: ${error}`
+        : `Generation ${Number(product.generation || 0)} · ${Number(product.file_count || 0)} audio file(s)`;
+      return `<div class="product-catalog-row ${error ? 'needs-attention' : ''}"><div><b>${escapeHtml(product.directory || product.product)}</b><span>${escapeHtml(stateLabel)} · ${escapeHtml(detail)}</span></div><button class="button secondary compact" type="button" data-product-catalog-rescan="${escapeHtml(product.product)}">Rescan</button></div>`;
+    }).join('')
+    : '<div class="empty-state">Product catalog reconciliation is waiting for the fixed media folders.</div>';
+}
+
+async function requestProductCatalogRescan(product) {
+  const requested = String(product || '').trim();
+  if (!requested) return;
+  setResult('unifiedMediaResult');
+  try {
+    const result = await api('/api/library/product-catalog/rescan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product: requested }), timeoutMs: 30000, idempotent: true,
+    });
+    state.productCatalog = result;
+    renderProductCatalog();
+    setResult('unifiedMediaResult', `${requested} catalog rescan queued; it will commit only after media is stable.`, 'success');
+  } catch (error) {
+    setResult('unifiedMediaResult', errorMessage(error), 'error');
+  }
+}
+
 function disarmStartBroadcast() {
   state.startArmedUntil = 0;
   if (state.startArmTimer) window.clearTimeout(state.startArmTimer);
@@ -1092,7 +1130,7 @@ async function requestManagedLibraryRescan() {
 }
 
 async function refreshUnifiedMedia() {
-  setBusy(true, 'Refreshing unified media views…', 'Building staged hardlinks and queuing the managed-library watcher');
+  setBusy(true, 'Refreshing unified media views…', 'Replacing mapped links, preserving verified drop-ins, and queuing the managed-library watcher');
   setResult('unifiedMediaResult');
   try {
     const result = await api('/api/library/unified-media/refresh', {
@@ -1109,7 +1147,7 @@ async function refreshUnifiedMedia() {
     await Promise.all([loadLibrary(1), loadJingles()]);
     const total = Object.values(result.views || {}).reduce((sum, count) => sum + Number(count || 0), 0);
     const queued = Number(result.library_rescan_queued_profiles || 0);
-    const message = `Verified: ${total} hardlink view file(s) refreshed. ${queued} managed library profile(s) queued for safe rescan.`;
+    const message = `Verified: ${total} hardlink view file(s) refreshed while preserving verified operator drop-ins. ${queued} managed library profile(s) queued for safe rescan.`;
     setResult('unifiedMediaResult', message, 'success');
     logActivity(message);
     toast('Unified media views refreshed');
@@ -2730,6 +2768,8 @@ function bindEvents() {
     if (serviceButton) controlRadioTEDUService(serviceButton);
     const servicePathButton = event.target.closest('[data-service-path]');
     if (servicePathButton) pickRadioTEDUServicePath(servicePathButton);
+    const productRescan = event.target.closest('[data-product-catalog-rescan]');
+    if (productRescan) requestProductCatalogRescan(productRescan.dataset.productCatalogRescan);
   });
 }
 

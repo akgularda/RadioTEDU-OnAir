@@ -211,6 +211,38 @@ test('unified media controls show root, linked-view status, refresh history, and
   assert.match(script, /refreshUnifiedMediaButton'\)\.addEventListener\('click', refreshUnifiedMedia\)/);
 });
 
+test('product catalog rows expose stable state and queue only the selected product rescan', async () => {
+  assert.match(html, /id="productCatalogRows"/);
+  assert.match(script, /api\('\/api\/library\/product-catalog\/status'\)/);
+  assert.match(script, /api\('\/api\/library\/product-catalog\/rescan'/);
+  const row = { innerHTML: '' };
+  const renderContext = {
+    state: { productCatalog: { products: [{ product: 'ads', directory: 'Ads', state: 'retry_wait', file_count: 2, generation: 3, error_code: 'catalog_database_busy' }] } },
+    $: (id) => id === 'productCatalogRows' ? row : null,
+    String, Number,
+    Array,
+    escapeHtml(value) { return String(value); },
+  };
+  vm.createContext(renderContext);
+  vm.runInContext(`${scriptSection('function renderProductCatalog()', 'function disarmStartBroadcast()')}\nglobalThis.__render = renderProductCatalog;`, renderContext);
+  renderContext.__render();
+  assert.match(row.innerHTML, /Ads/);
+  assert.match(row.innerHTML, /catalog_database_busy/);
+  assert.match(row.innerHTML, /data-product-catalog-rescan="ads"/);
+
+  const requests = [];
+  const actionContext = {
+    state: {}, String, JSON,
+    api: async (...args) => { requests.push(args); return { products: [] }; },
+    setResult() {}, renderProductCatalog() {}, errorMessage(error) { return String(error); },
+  };
+  vm.createContext(actionContext);
+  vm.runInContext(`${scriptSection('async function requestProductCatalogRescan(', 'async function loadQueue()')}\nglobalThis.__rescan = requestProductCatalogRescan;`, actionContext);
+  await actionContext.__rescan('ads');
+  assert.equal(requests[0][0], '/api/library/product-catalog/rescan');
+  assert.equal(requests[0][1].body, JSON.stringify({ product: 'ads' }));
+});
+
 test('SCM-owned service cards retain saved auto-start while showing commissioning-gated autonomous readiness', () => {
   const payload = {
     definitions: [
