@@ -470,3 +470,129 @@ def test_api_action_uses_backend_confirmation_guard(tmp_path, monkeypatch):
             _user={},
         )
     assert exc.value.detail == "confirmation_required"
+
+
+def _windows_scm_agent_settings(tmp_path: Path, service_id: str):
+    source = tmp_path / service_id
+    source.mkdir()
+    (source / "package.json").write_text("{}", encoding="utf-8")
+    if service_id == "juke_media_agent":
+        (source / "server.js").write_text("setInterval(() => {}, 1000);", encoding="utf-8")
+        env_text = "\n".join(
+            [
+                "MEDIA_AGENT_BIND_HOST=127.0.0.1",
+                "AI_MIRROR_ENABLED=false",
+                "AI_AUTOPLAY_ENABLED=false",
+                "MEDIA_AGENT_REQUEST_SECRET=test-only-value",
+            ]
+        )
+    else:
+        entry = source / "scripts" / "voting-supervisor.mjs"
+        entry.parent.mkdir()
+        entry.write_text("setInterval(() => {}, 1000);", encoding="utf-8")
+        env_text = "\n".join(
+            [
+                "PORT=4317",
+                "LOCAL_HTTP_STREAM_ENABLED=true",
+                "LOCAL_HTTP_STREAM_PORT=4320",
+                "RADIO_AGENT_REQUEST_SECRET=test-only-value",
+            ]
+        )
+    env_file = tmp_path / f"{service_id}.env"
+    env_file.write_text(env_text + "\n", encoding="utf-8")
+    settings = _settings(tmp_path)
+    settings[service_id].update(
+        {
+            "enabled": True,
+            "auto_start": True,
+            "source_dir": str(source),
+            "config_path": str(env_file),
+            "health_urls": [],
+        }
+    )
+    return control.normalize_settings(settings), env_file
+
+
+def test_windows_scm_agents_are_never_backend_autostarted(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    for service_id in control.SCM_OWNED_SERVICE_IDS:
+        settings[service_id].update({"enabled": True, "auto_start": True})
+    calls = []
+    monkeypatch.setattr(control, "_start", lambda service_id, _settings: calls.append(service_id))
+
+    assert control.auto_start_enabled(settings) == []
+    assert calls == []
+
+
+def test_juke_foreground_verification_is_secret_free_and_invalidates_on_change(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(
+        "CLEANROOM_DB_PATH", str(tmp_path / "onair-data" / "cleanroom.db")
+    )
+    settings, env_file = _windows_scm_agent_settings(tmp_path, "juke_media_agent")
+    config = settings["juke_media_agent"]
+
+    initial = control.autonomous_startup_status("juke_media_agent", config)
+    assert initial["owner"] == "windows_scm"
+    assert initial["state"] == "verification_required"
+
+    verified = control.record_successful_foreground_evidence(
+        "juke_media_agent",
+        config,
+        {
+            "loopback_ports": [3210],
+            "mirror_disabled": True,
+            "autoplay_disabled": True,
+            "untrusted_note": "must-not-be-persisted",
+        },
+    )
+    assert verified["ready"] is True
+    assert verified["state"] == "verified"
+    assert verified["evidence"] == {
+        "loopback_ports": [3210],
+        "mirror_disabled": True,
+        "autoplay_disabled": True,
+    }
+    ledger_text = (tmp_path / "onair-data" / "radiotedu-services" / "foreground-verifications.json").read_text(encoding="utf-8")
+    assert "test-only-value" not in ledger_text
+    assert "untrusted_note" not in ledger_text
+
+    env_file.write_text(env_file.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    stale = control.autonomous_startup_status("juke_media_agent", config)
+    assert stale["ready"] is False
+    assert stale["state"] == "verification_stale"
+
+
+def test_voting_verification_requires_loopback_ports_and_sole_ai_owner(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(
+        "CLEANROOM_DB_PATH", str(tmp_path / "onair-data" / "cleanroom.db")
+    )
+    settings, _env_file = _windows_scm_agent_settings(tmp_path, "voting_agent")
+    config = settings["voting_agent"]
+
+    with pytest.raises(HTTPException) as exc:
+        control.record_successful_foreground_evidence(
+            "voting_agent",
+            config,
+            {"loopback_ports": [4317, 4320], "ai_mount_owner": "other"},
+        )
+    assert exc.value.detail == "foreground_verification_failed"
+
+    verified = control.record_successful_foreground_evidence(
+        "voting_agent",
+        config,
+        {"loopback_ports": [4317, 4320], "ai_mount_owner": "voting_agent"},
+    )
+    assert verified["ready"] is True
+    assert verified["evidence"] == {
+        "loopback_ports": [4317, 4320],
+        "ai_mount_owner": "voting_agent",
+    }
+    public = control.public_settings(settings)
+    assert public["autonomous_startup"]["voting_agent"]["state"] == "verified"
+    definition = next(item for item in public["definitions"] if item["id"] == "voting_agent")
+    assert definition["startup_owner"] == "windows_scm"
+    assert "test-only-value" not in str(public)

@@ -24,6 +24,7 @@ const state = {
   stationSettings: null,
   stationOutput: null,
   libraryWatcher: null,
+  unifiedMedia: null,
   integrations: null,
   radioteduServices: null,
   serviceActionArmed: {},
@@ -391,7 +392,7 @@ async function loadStations(preferredId = null) {
 
 async function loadCoreStatus() {
   const sid = state.stationId;
-  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher] = await Promise.all([
+  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher, unifiedMedia] = await Promise.all([
     api(`/api/health?station_id=${sid}`),
     api(`/api/runtime/${sid}/status`),
     api(`/api/ai/settings?station_id=${sid}`),
@@ -400,6 +401,7 @@ async function loadCoreStatus() {
     api(`/api/settings/station?station_id=${sid}`),
     api(`/api/stations/output?station_id=${sid}`),
     api('/api/library/watcher/status').catch(() => ({ running: false, profiles: [] })),
+    api('/api/library/unified-media/status').catch(() => ({ root: '', views: [], source_map_configured: false, last_error: '' })),
   ]);
   state.health = health;
   state.runtime = runtime;
@@ -409,9 +411,11 @@ async function loadCoreStatus() {
   state.stationSettings = stationSettings?.settings || stationSettings || {};
   state.stationOutput = stationOutput || {};
   state.libraryWatcher = libraryWatcher || { running: false, profiles: [] };
+  state.unifiedMedia = unifiedMedia || { root: '', views: [], source_map_configured: false, last_error: '' };
   const publicStation = (publicStations.stations || []).find((station) => Number(station.id) === Number(sid));
   renderCoreStatus(publicStation);
   renderLibraryProfile();
+  renderUnifiedMedia();
   renderOutputConfiguration();
   renderAiConfiguration();
   renderTimeline();
@@ -463,12 +467,31 @@ function serviceControlId(serviceId, field) {
   return `service-${serviceId}-${field}`;
 }
 
+function isWindowsScmOwned(definition, status = {}) {
+  return String(status.startup_owner || definition.startup_owner || '') === 'windows_scm';
+}
+
+function windowsScmOwnershipText(autonomousStartup = {}) {
+  const ready = autonomousStartup.ready === true;
+  const state = String(autonomousStartup.state || (ready ? 'verified' : 'commissioning pending')).replaceAll('_', ' ');
+  const reasons = Array.isArray(autonomousStartup.reasons) && autonomousStartup.reasons.length
+    ? ` Blocking checks: ${autonomousStartup.reasons.map((reason) => escapeHtml(String(reason).replaceAll('_', ' '))).join(', ')}.`
+    : '';
+  const verifiedAt = autonomousStartup.verified_at
+    ? ` Foreground evidence verified ${escapeHtml(new Date(autonomousStartup.verified_at).toLocaleString())}.`
+    : '';
+  const evidence = autonomousStartup.evidence && Object.keys(autonomousStartup.evidence).length
+    ? ` Evidence: ${escapeHtml(JSON.stringify(autonomousStartup.evidence))}.`
+    : '';
+  return `<b>Windows SCM owns autonomous startup.</b> SCM enrollment is gated by commissioning; autonomous readiness: ${escapeHtml(state)}.${ready ? '' : reasons}${verifiedAt}${evidence} App startup is disabled here; Start/Stop remain manual controls.`;
+}
+
 function renderRadioTEDUServices() {
   const container = $('serviceControlCards');
   if (!container) return;
   const payload = state.radioteduServices || {};
   const definitions = Array.isArray(payload.definitions) ? payload.definitions : [];
-  const signature = definitions.map((item) => item.id).join('|');
+  const signature = definitions.map((item) => `${item.id}:${item.startup_owner || ''}`).join('|');
   if (container.dataset.signature !== signature) {
     container.dataset.signature = signature;
     container.innerHTML = definitions.map((definition) => {
@@ -476,6 +499,7 @@ function renderRadioTEDUServices() {
       const mounts = Array.isArray(definition.mounts) && definition.mounts.length
         ? ` Mounts: ${definition.mounts.join(', ')}.`
         : '';
+      const windowsScmOwned = isWindowsScmOwned(definition);
       return `
         <section class="service-control-card" data-service-card="${escapeHtml(definition.id)}" data-state="disabled">
           <div class="service-card-head">
@@ -488,8 +512,9 @@ function renderRadioTEDUServices() {
           </div>
           <div class="service-switches">
             <label class="check-row"><input id="${serviceControlId(definition.id, 'enabled')}" type="checkbox"> Enable management</label>
-            <label class="check-row"><input id="${serviceControlId(definition.id, 'autostart')}" type="checkbox"> Start with RadioTEDU OnAir</label>
+            <label class="check-row"><input id="${serviceControlId(definition.id, 'autostart')}" type="checkbox"${windowsScmOwned ? ' disabled' : ''}> Start with RadioTEDU OnAir</label>
           </div>
+          <div class="service-startup-owner" id="${serviceControlId(definition.id, 'startup-owner')}"${windowsScmOwned ? '' : ' hidden'}>${windowsScmOwned ? '<b>Windows SCM owns autonomous startup.</b> SCM enrollment is gated by commissioning; Start/Stop remain manual controls.' : ''}</div>
           ${isOllama ? `
           <div class="ollama-controls">
             <div class="inline-status"><b>Local-only runtime</b><br>RadioTEDU OnAir detects the installed Ollama executable and talks only to 127.0.0.1. AI can be disabled without affecting music, microphone, or streaming.</div>
@@ -527,8 +552,23 @@ function renderRadioTEDUServices() {
     const serviceId = definition.id;
     const config = configurations[serviceId] || {};
     const status = statuses.get(serviceId) || {};
+    const windowsScmOwned = isWindowsScmOwned(definition, status);
     setCleanChecked(serviceControlId(serviceId, 'enabled'), Boolean(config.enabled));
     setCleanChecked(serviceControlId(serviceId, 'autostart'), Boolean(config.auto_start));
+    const autoStart = $(serviceControlId(serviceId, 'autostart'));
+    if (autoStart) {
+      autoStart.disabled = windowsScmOwned;
+      autoStart.title = windowsScmOwned
+        ? 'Windows SCM owns autonomous startup. This saved RadioTEDU OnAir preference is retained but not used to start the service.'
+        : '';
+    }
+    const startupOwner = $(serviceControlId(serviceId, 'startup-owner'));
+    if (startupOwner) {
+      startupOwner.hidden = !windowsScmOwned;
+      startupOwner.innerHTML = windowsScmOwned
+        ? windowsScmOwnershipText(status.autonomous_startup || {})
+        : '';
+    }
     if ($(serviceControlId(serviceId, 'source'))) setCleanValue(serviceControlId(serviceId, 'source'), config.source_dir || '');
     if ($(serviceControlId(serviceId, 'config'))) setCleanValue(serviceControlId(serviceId, 'config'), config.config_path || '');
     if ($(serviceControlId(serviceId, 'health'))) setCleanValue(serviceControlId(serviceId, 'health'), (config.health_urls || []).join('\n'));
@@ -583,9 +623,12 @@ function collectRadioTEDUServiceSettings() {
   (state.radioteduServices?.definitions || []).forEach((definition) => {
     const serviceId = definition.id;
     const config = state.radioteduServices?.services?.[serviceId] || {};
+    const status = (state.radioteduServices?.status || []).find((item) => item.id === serviceId) || {};
+    const autoStart = $(serviceControlId(serviceId, 'autostart'));
+    const windowsScmOwned = isWindowsScmOwned(definition, status);
     payload[serviceId] = {
       enabled: $(serviceControlId(serviceId, 'enabled')).checked,
-      auto_start: $(serviceControlId(serviceId, 'autostart')).checked,
+      auto_start: windowsScmOwned ? Boolean(config.auto_start) : Boolean(autoStart?.checked),
       source_dir: $(serviceControlId(serviceId, 'source'))?.value.trim() || '',
       config_path: $(serviceControlId(serviceId, 'config'))?.value.trim() || '',
       health_urls: $(serviceControlId(serviceId, 'health'))?.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) || config.health_urls || [],
@@ -799,6 +842,32 @@ function syncActionButtons() {
   if ($('deleteStationButton')) $('deleteStationButton').disabled = state.stations.length <= 1;
   $('libraryPrev').disabled = state.libraryPage <= 1;
   $('libraryNext').disabled = state.libraryPage >= state.libraryPages;
+}
+
+function renderUnifiedMedia() {
+  const payload = state.unifiedMedia || {};
+  const root = String(payload.root || '').trim();
+  const configured = Boolean(payload.source_map_configured);
+  const lastError = String(payload.last_error || '').trim();
+  const views = Array.isArray(payload.views) ? payload.views : [];
+  const stateLabel = lastError
+    ? 'Needs attention'
+    : configured && payload.layout_ready
+      ? 'Ready'
+      : configured
+        ? 'Layout pending'
+        : 'Source map required';
+  $('unifiedMediaState').textContent = stateLabel;
+  $('unifiedMediaRoot').textContent = root || 'No media root is configured.';
+  $('unifiedMediaViews').innerHTML = views.length
+    ? views.map((view) => `<div class="unified-media-view ${view.exists ? 'ready' : 'pending'}"><b>${escapeHtml(view.directory || view.view || 'View')}</b><span>${Number(view.file_count || 0)} linked file(s) · ${view.exists ? 'available' : 'not published'}</span></div>`).join('')
+    : '<div class="empty-state">No managed media views are available yet.</div>';
+  const refreshAt = String(payload.last_refresh_at || payload.last_published_at || '').trim();
+  const refreshText = refreshAt ? `Last refresh: ${new Date(refreshAt).toLocaleString()}` : 'No refresh has been recorded.';
+  $('unifiedMediaDetails').textContent = lastError
+    ? `${refreshText} Last error: ${lastError}`
+    : `${refreshText} ${configured ? 'Source map is explicit and ready for a safe rebuild.' : 'Create the protected explicit source map before rebuilding.'}`;
+  $('refreshUnifiedMediaButton').disabled = !configured;
 }
 
 function disarmStartBroadcast() {
@@ -1017,6 +1086,44 @@ async function requestManagedLibraryRescan() {
     const message = errorMessage(error);
     setResult('librarySyncResult', message, 'error');
     logActivity(`Managed-folder rescan failed: ${message}`, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function refreshUnifiedMedia() {
+  setBusy(true, 'Refreshing unified media views…', 'Building staged hardlinks and queuing the managed-library watcher');
+  setResult('unifiedMediaResult');
+  try {
+    const result = await api('/api/library/unified-media/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_library_rescan: true }),
+      timeoutMs: 600000,
+      idempotent: true,
+    });
+    state.libraryWatcher = result.watcher || state.libraryWatcher;
+    state.unifiedMedia = await api('/api/library/unified-media/status');
+    renderUnifiedMedia();
+    renderLibraryProfile();
+    await Promise.all([loadLibrary(1), loadJingles()]);
+    const total = Object.values(result.views || {}).reduce((sum, count) => sum + Number(count || 0), 0);
+    const queued = Number(result.library_rescan_queued_profiles || 0);
+    const message = `Verified: ${total} hardlink view file(s) refreshed. ${queued} managed library profile(s) queued for safe rescan.`;
+    setResult('unifiedMediaResult', message, 'success');
+    logActivity(message);
+    toast('Unified media views refreshed');
+  } catch (error) {
+    const message = errorMessage(error);
+    setResult('unifiedMediaResult', message, 'error');
+    logActivity(`Unified media refresh failed: ${message}`, 'error');
+    toast(message, 'error');
+    try {
+      state.unifiedMedia = await api('/api/library/unified-media/status');
+      renderUnifiedMedia();
+    } catch (_) {
+      // Preserve the original refresh failure for the operator.
+    }
   } finally {
     setBusy(false);
   }
@@ -2592,6 +2699,7 @@ function bindEvents() {
   $('librarySearchForm').addEventListener('submit', (event) => { event.preventDefault(); loadLibrary(1).catch((error) => toast(errorMessage(error), 'error')); });
   $('libraryFolderForm').addEventListener('submit', syncLibraryFolder);
   $('rescanLibraryButton').addEventListener('click', requestManagedLibraryRescan);
+  $('refreshUnifiedMediaButton').addEventListener('click', refreshUnifiedMedia);
   $('broadcastAutostartEnabled').addEventListener('change', updateBroadcastAutostartFromControl);
   $('browseLibraryFolderButton').addEventListener('click', () => pickManagedFolder('libraryFolder', 'Select this station\'s music folder'));
   ['libraryFolder', 'libraryProfileLabel', 'libraryDefaultGenre', 'libraryDefaultLanguage'].forEach((id) => {

@@ -48,6 +48,11 @@ Source: "..\LICENSE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "EnsureDesktopPrerequisites.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "HardenServiceHostAcl.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "ProvisionBroadcastPcAgents.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "NewBroadcastPcHandoffManifest.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "requirements\radiotedu-handoff-py312.lock.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
+Source: "templates\unified-media-source-map.json"; DestDir: "{app}\installer\templates"; Flags: ignoreversion
+Source: "..\tools\radiotedu_public_state_agent.py"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\release\prerequisites\OllamaSetup.exe"; DestDir: "{app}\installer"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\release\prerequisites\windowsdesktop-runtime-win-x64.exe"; DestDir: "{app}\installer"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\release\prerequisites\ollama.exe"; DestDir: "{app}\prerequisites"; Flags: ignoreversion skipifsourcedoesntexist

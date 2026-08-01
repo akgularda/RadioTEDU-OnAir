@@ -36,6 +36,9 @@ CONFIRMATIONS = {
     "pull_model": "INSTALL MODEL",
 }
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+SCM_OWNED_SERVICE_IDS = frozenset({"juke_media_agent", "voting_agent"})
+STARTUP_OWNER_ONAIR_PROCESS = "onair_process"
+STARTUP_OWNER_WINDOWS_SCM = "windows_scm"
 SECRET_KEY_PARTS = ("secret", "password", "token", "credential", "authorization")
 _LOCK = threading.RLock()
 _PROCESSES: dict[str, subprocess.Popen] = {}
@@ -94,6 +97,7 @@ SERVICE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "http://127.0.0.1:4317/api/state",
         ),
         "mounts": ("/ai",),
+        "startup_owner": STARTUP_OWNER_WINDOWS_SCM,
         "database_supported": False,
         "database_kind": "",
     },
@@ -125,6 +129,7 @@ SERVICE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "http://127.0.0.1:3210/v1/status",
         ),
         "mounts": (),
+        "startup_owner": STARTUP_OWNER_WINDOWS_SCM,
         "database_supported": False,
         "database_kind": "",
     },
@@ -271,6 +276,300 @@ def _process_registry_key(service_id: str) -> str:
 
 def _maintenance_path() -> Path:
     return _runtime_dir() / "database-maintenance.json"
+
+
+def _foreground_verification_path() -> Path:
+    return _runtime_dir() / "foreground-verifications.json"
+
+
+def _load_foreground_verifications() -> dict[str, dict[str, Any]]:
+    value = read_json_object(_foreground_verification_path())
+    return value if isinstance(value, dict) else {}
+
+
+def _save_foreground_verifications(value: dict[str, dict[str, Any]]) -> None:
+    atomic_write_json(_foreground_verification_path(), value)
+
+
+def _startup_owner(service_id: str) -> str:
+    if service_id in SCM_OWNED_SERVICE_IDS:
+        return STARTUP_OWNER_WINDOWS_SCM
+    return str(
+        SERVICE_DEFINITIONS[service_id].get(
+            "startup_owner", STARTUP_OWNER_ONAIR_PROCESS
+        )
+    )
+
+
+def _hash_json(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _config_fingerprint(config: dict[str, Any]) -> str:
+    """Return a content fingerprint without retaining configuration values."""
+    path = Path(str(config.get("config_path") or ""))
+    try:
+        if path.is_file():
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        if path.is_dir():
+            entries = [
+                (str(item.relative_to(path)).replace("\\", "/"), item.stat().st_size, item.stat().st_mtime_ns)
+                for item in sorted(path.rglob("*"))
+                if item.is_file()
+            ]
+            return _hash_json(entries)
+    except OSError:
+        return ""
+    return ""
+
+
+def _source_fingerprint(service_id: str, config: dict[str, Any]) -> str:
+    """Fingerprint source identity without exposing its local path or contents."""
+    source = _source_status(service_id, config)
+    raw_root = str(config.get("source_dir") or "").strip()
+    root = Path(raw_root)
+    required: list[dict[str, Any]] = []
+    for relative in SERVICE_DEFINITIONS[service_id].get("required", ()):
+        item = root / relative
+        try:
+            stat = item.stat()
+            required.append(
+                {
+                    "name": str(relative),
+                    "size": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                }
+            )
+        except OSError:
+            required.append({"name": str(relative), "missing": True})
+    return _hash_json(
+        {
+            "root": hashlib.sha256(str(root.resolve(strict=False)).encode()).hexdigest(),
+            "commit": str(source.get("commit") or ""),
+            "dirty": bool(source.get("dirty")),
+            "required": required,
+        }
+    )
+
+
+def _verification_fingerprints(
+    service_id: str, config: dict[str, Any]
+) -> tuple[str, str]:
+    return _source_fingerprint(service_id, config), _config_fingerprint(config)
+
+
+def _env_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(value: Any) -> bool:
+    return str(value or "").strip().lower() in LOOPBACK_HOSTS
+
+
+def _env_port(values: dict[str, str], key: str) -> int:
+    try:
+        value = int(str(values.get(key) or "").strip())
+    except (TypeError, ValueError):
+        return 0
+    return value if 1 <= value <= 65535 else 0
+
+
+def _autonomous_startup_requirements(
+    service_id: str, config: dict[str, Any]
+) -> list[str]:
+    """Return stable, non-secret configuration failures for SCM enrollment."""
+    if _startup_owner(service_id) != STARTUP_OWNER_WINDOWS_SCM:
+        return []
+    path = Path(str(config.get("config_path") or ""))
+    if not path.is_file():
+        return ["protected_config_not_ready"]
+    try:
+        values = _read_env(path)
+    except OSError:
+        return ["protected_config_unreadable"]
+    if service_id == "juke_media_agent":
+        failures: list[str] = []
+        if not _is_loopback_host(values.get("MEDIA_AGENT_BIND_HOST")):
+            failures.append("juke_bind_not_loopback")
+        if str(values.get("AI_MIRROR_ENABLED") or "").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            failures.append("juke_ai_mirror_enabled")
+        if str(values.get("AI_AUTOPLAY_ENABLED") or "").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            failures.append("juke_ai_autoplay_enabled")
+        return failures
+    if service_id == "voting_agent":
+        failures = []
+        if _env_port(values, "PORT") != 4317:
+            failures.append("voting_control_port_not_4317")
+        if not _env_truthy(values.get("LOCAL_HTTP_STREAM_ENABLED")):
+            failures.append("voting_local_stream_disabled")
+        if _env_port(values, "LOCAL_HTTP_STREAM_PORT") != 4320:
+            failures.append("voting_stream_port_not_4320")
+        return failures
+    return []
+
+
+def _foreground_evidence(
+    service_id: str, evidence: Any
+) -> tuple[dict[str, Any], list[str]]:
+    """Allowlist foreground proof so caller input can never become a secret ledger."""
+    raw = evidence if isinstance(evidence, dict) else {}
+    raw_ports = raw.get("loopback_ports")
+    raw_ports = raw_ports if isinstance(raw_ports, list) else []
+    ports = sorted(
+        {
+            int(item)
+            for item in raw_ports
+            if isinstance(item, int)
+            and 1 <= int(item) <= 65535
+        }
+    )
+    if service_id == "juke_media_agent":
+        public = {
+            "loopback_ports": [port for port in ports if port == 3210],
+            "mirror_disabled": raw.get("mirror_disabled") is True,
+            "autoplay_disabled": raw.get("autoplay_disabled") is True,
+        }
+        failures = []
+        if public["loopback_ports"] != [3210]:
+            failures.append("juke_loopback_port_unverified")
+        if not public["mirror_disabled"]:
+            failures.append("juke_mirror_unverified")
+        if not public["autoplay_disabled"]:
+            failures.append("juke_autoplay_unverified")
+        return public, failures
+    if service_id == "voting_agent":
+        public = {
+            "loopback_ports": [port for port in ports if port in {4317, 4320}],
+            "ai_mount_owner": (
+                "voting_agent" if raw.get("ai_mount_owner") == "voting_agent" else ""
+            ),
+        }
+        failures = []
+        if public["loopback_ports"] != [4317, 4320]:
+            failures.append("voting_loopback_ports_unverified")
+        if public["ai_mount_owner"] != "voting_agent":
+            failures.append("voting_ai_mount_owner_unverified")
+        return public, failures
+    return {}, []
+
+
+def invalidate_stale_foreground_verification(
+    service_id: str, config: dict[str, Any]
+) -> bool:
+    """Drop verification evidence when the source or protected config changes."""
+    if _startup_owner(service_id) != STARTUP_OWNER_WINDOWS_SCM:
+        return False
+    source_fingerprint, config_fingerprint = _verification_fingerprints(service_id, config)
+    with _LOCK:
+        ledger = _load_foreground_verifications()
+        record = ledger.get(service_id)
+        if not isinstance(record, dict):
+            return False
+        if (
+            record.get("source_fingerprint") == source_fingerprint
+            and record.get("config_fingerprint") == config_fingerprint
+        ):
+            return False
+        ledger.pop(service_id, None)
+        _save_foreground_verifications(ledger)
+        return True
+
+
+def record_successful_foreground_evidence(
+    service_id: str,
+    config: dict[str, Any],
+    evidence: Any,
+) -> dict[str, Any]:
+    """Record an allowlisted foreground proof for future SCM autonomous startup."""
+    if service_id not in SERVICE_DEFINITIONS:
+        raise HTTPException(status_code=404, detail="unknown_service")
+    if _startup_owner(service_id) != STARTUP_OWNER_WINDOWS_SCM:
+        raise HTTPException(status_code=409, detail="service_not_windows_scm_owned")
+    source = _source_status(service_id, config)
+    requirements = _autonomous_startup_requirements(service_id, config)
+    public_evidence, evidence_failures = _foreground_evidence(service_id, evidence)
+    if not source["ready"] or requirements or evidence_failures:
+        raise HTTPException(status_code=409, detail="foreground_verification_failed")
+    source_fingerprint, config_fingerprint = _verification_fingerprints(service_id, config)
+    verified_at = datetime.now(timezone.utc).isoformat()
+    with _LOCK:
+        ledger = _load_foreground_verifications()
+        ledger[service_id] = {
+            "source_fingerprint": source_fingerprint,
+            "config_fingerprint": config_fingerprint,
+            "verified_at": verified_at,
+            "evidence": public_evidence,
+        }
+        _save_foreground_verifications(ledger)
+    return autonomous_startup_status(service_id, config)
+
+
+def autonomous_startup_status(
+    service_id: str, config: dict[str, Any]
+) -> dict[str, Any]:
+    owner = _startup_owner(service_id)
+    if owner != STARTUP_OWNER_WINDOWS_SCM:
+        return {
+            "owner": owner,
+            "ready": False,
+            "state": "not_windows_scm_owned",
+            "reasons": [],
+            "verified_at": "",
+        }
+    source = _source_status(service_id, config)
+    requirements = _autonomous_startup_requirements(service_id, config)
+    if not source["ready"] or requirements:
+        return {
+            "owner": owner,
+            "ready": False,
+            "state": "not_ready",
+            "reasons": (["service_source_not_ready"] if not source["ready"] else [])
+            + requirements,
+            "verified_at": "",
+        }
+    stale = invalidate_stale_foreground_verification(service_id, config)
+    with _LOCK:
+        record = _load_foreground_verifications().get(service_id)
+    if not isinstance(record, dict):
+        return {
+            "owner": owner,
+            "ready": False,
+            "state": "verification_stale" if stale else "verification_required",
+            "reasons": [
+                "foreground_verification_stale"
+                if stale
+                else "foreground_verification_required"
+            ],
+            "verified_at": "",
+        }
+    return {
+        "owner": owner,
+        "ready": True,
+        "state": "verified",
+        "reasons": [],
+        "verified_at": str(record.get("verified_at") or ""),
+        "evidence": dict(record.get("evidence") or {}),
+    }
 
 
 def _load_ledger() -> dict[str, dict[str, Any]]:
@@ -718,6 +1017,8 @@ def service_status(
         "config_ready": config_ready,
         "health": checks,
         "mounts": _service_mounts(service_id, config),
+        "startup_owner": _startup_owner(service_id),
+        "autonomous_startup": autonomous_startup_status(service_id, config),
         "database_supported": bool(definition["database_supported"]),
         "database": _database_status(
             service_id,
@@ -746,6 +1047,10 @@ def all_service_statuses(
 def public_settings(settings: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
         "services": settings,
+        "autonomous_startup": {
+            service_id: autonomous_startup_status(service_id, settings[service_id])
+            for service_id in SERVICE_DEFINITIONS
+        },
         "definitions": [
             {
                 "id": service_id,
@@ -753,6 +1058,7 @@ def public_settings(settings: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 "name": definition["name"],
                 "description": definition["description"],
                 "kind": definition["kind"],
+                "startup_owner": _startup_owner(service_id),
                 "database_supported": bool(
                     definition["database_supported"]
                 ),
@@ -1334,6 +1640,12 @@ def auto_start_enabled(settings: dict[str, dict[str, Any]]) -> list[str]:
     started: list[str] = []
     for service_id, config in settings.items():
         if not config.get("enabled") or not config.get("auto_start"):
+            continue
+        # These agents are deliberately supervised by Windows SCM once an
+        # operator has completed a verified foreground enrollment.  The OnAir
+        # backend may still launch them manually for foreground diagnostics,
+        # but it must never become their autonomous boot supervisor.
+        if _startup_owner(service_id) == STARTUP_OWNER_WINDOWS_SCM:
             continue
         try:
             _start(service_id, settings)

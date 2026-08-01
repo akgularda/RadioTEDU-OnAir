@@ -126,6 +126,59 @@ function invokeGuard(functionSource, handlerName, state, extras = {}) {
   return { invoke: (...args) => context.__handler(...args), requests };
 }
 
+function createServiceRenderHarness(payload) {
+  const nodes = new Map();
+  const makeNode = () => ({
+    dataset: {}, checked: false, disabled: false, hidden: false, title: '', value: '', innerHTML: '', textContent: '',
+  });
+  const cards = new Map();
+  for (const definition of payload.definitions) {
+    const id = definition.id;
+    for (const field of ['enabled', 'autostart', 'source', 'config', 'health', 'backup', 'state', 'summary', 'startup-owner']) {
+      nodes.set(`service-${id}-${field}`, makeNode());
+    }
+    const actions = { start: makeNode(), stop: makeNode(), restart: makeNode() };
+    cards.set(id, {
+      dataset: {},
+      querySelector(selector) {
+        return actions[selector.match(/"(start|stop|restart)"/)?.[1]] || null;
+      },
+      actions,
+    });
+  }
+  const signature = payload.definitions.map((item) => `${item.id}:${item.startup_owner || ''}`).join('|');
+  const container = {
+    dataset: { signature },
+    querySelector(selector) {
+      return cards.get(selector.match(/data-service-card="([^"]+)"/)?.[1]) || null;
+    },
+    querySelectorAll() { return []; },
+  };
+  nodes.set('serviceControlCards', container);
+  nodes.set('serviceControlState', makeNode());
+  const context = {
+    state: { radioteduServices: payload },
+    Map,
+    Date,
+    JSON,
+    String,
+    Boolean,
+    Array,
+    Object,
+    $: (id) => nodes.get(id) || null,
+    escapeHtml(value) { return String(value ?? ''); },
+    setCleanChecked(id, value) { const node = nodes.get(id); if (node && node.dataset.dirty !== '1') node.checked = Boolean(value); },
+    setCleanValue(id, value) { const node = nodes.get(id); if (node && node.dataset.dirty !== '1') node.value = value ?? ''; },
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${scriptSection('function serviceControlId(', 'async function pickRadioTEDUServicePath(')}\n`
+      + 'globalThis.__render = renderRadioTEDUServices; globalThis.__collect = collectRadioTEDUServiceSettings;',
+    context,
+  );
+  return { nodes, cards, render: context.__render, collect: context.__collect };
+}
+
 test('RadioTEDU OnAir wall is visibly branded and supports arbitrary station mounts', () => {
   assert.match(html, /RadioTEDU OnAir/);
   assert.match(html, /assets\/radiotedu-onair-logo\.png/);
@@ -144,6 +197,59 @@ test('multi-station, genre, queue, jingle, emergency, and optional AI controls a
   assert.match(html, /id="jingleFolderForm"/);
   assert.match(html, /id="startEmergencyButton"/);
   assert.match(html, /id="aiConfigForm"/);
+});
+
+test('unified media controls show root, linked-view status, refresh history, and safe rebuild action', () => {
+  assert.match(html, /id="unifiedMediaRoot"/);
+  assert.match(html, /id="unifiedMediaViews"/);
+  assert.match(html, /id="unifiedMediaDetails"/);
+  assert.match(html, /id="refreshUnifiedMediaButton"/);
+  assert.match(script, /api\('\/api\/library\/unified-media\/status'\)/);
+  assert.match(script, /api\('\/api\/library\/unified-media\/refresh'/);
+  assert.match(script, /request_library_rescan: true/);
+  assert.match(script, /function renderUnifiedMedia\(\)/);
+  assert.match(script, /refreshUnifiedMediaButton'\)\.addEventListener\('click', refreshUnifiedMedia\)/);
+});
+
+test('SCM-owned service cards retain saved auto-start while showing commissioning-gated autonomous readiness', () => {
+  const payload = {
+    definitions: [
+      { id: 'juke_media_agent', startup_owner: 'windows_scm', kind: 'rtai_service', mounts: [], database_supported: false },
+      { id: 'ollama', startup_owner: 'onair_process', kind: 'ollama', mounts: [], database_supported: false },
+    ],
+    services: {
+      juke_media_agent: { enabled: true, auto_start: true, health_urls: [] },
+      ollama: { enabled: true, auto_start: false, health_urls: [] },
+    },
+    status: [
+      {
+        id: 'juke_media_agent', startup_owner: 'windows_scm', state: 'not_ready', runtime: 'stopped', config_ready: true,
+        autonomous_startup: { ready: false, state: 'verification_required', reasons: ['foreground_verification_required'] },
+      },
+      { id: 'ollama', startup_owner: 'onair_process', state: 'healthy', runtime: 'stopped', config_ready: true },
+    ],
+  };
+  const harness = createServiceRenderHarness(payload);
+  harness.render();
+
+  const jukeAutoStart = harness.nodes.get('service-juke_media_agent-autostart');
+  const jukeOwnership = harness.nodes.get('service-juke_media_agent-startup-owner');
+  assert.equal(jukeAutoStart.checked, true);
+  assert.equal(jukeAutoStart.disabled, true);
+  assert.equal(jukeOwnership.hidden, false);
+  assert.match(jukeOwnership.innerHTML, /Windows SCM owns autonomous startup/);
+  assert.match(jukeOwnership.innerHTML, /commissioning/);
+  assert.match(jukeOwnership.innerHTML, /Start\/Stop remain manual controls/);
+  assert.match(jukeOwnership.innerHTML, /verification required/);
+
+  jukeAutoStart.checked = false;
+  const ollamaAutoStart = harness.nodes.get('service-ollama-autostart');
+  ollamaAutoStart.checked = true;
+  assert.equal(ollamaAutoStart.disabled, false);
+  assert.equal(harness.nodes.get('service-ollama-startup-owner').hidden, true);
+  const saved = harness.collect();
+  assert.equal(saved.juke_media_agent.auto_start, true);
+  assert.equal(saved.ollama.auto_start, true);
 });
 
 test('station context is accepted from the app URL and updated when the operator switches stations', () => {

@@ -243,6 +243,20 @@
           </form>
           <p id="librarySyncResult" class="action-result" aria-live="polite"></p>
         </article>
+        <article class="panel unified-media-panel">
+          <div class="panel-heading">
+            <div><div class="eyebrow">UNIFIED MEDIA ROOT</div><h2>Hardlink library views</h2></div>
+            <div id="unifiedMediaState" class="mini-state">Checking</div>
+          </div>
+          <p class="card-copy">The station uses explicit, language-labelled sources to build hardlink-only Broadcast, Juke, Voting, and production-media views. Rebuilding never copies media.</p>
+          <div id="unifiedMediaRoot" class="managed-path">Configured media root is loading…</div>
+          <div id="unifiedMediaViews" class="unified-media-views" aria-live="polite"></div>
+          <div id="unifiedMediaDetails" class="unified-media-details">No refresh has been recorded.</div>
+          <div class="button-row">
+            <button id="refreshUnifiedMediaButton" class="button primary" type="button">Refresh hardlink views and queue library rescan</button>
+          </div>
+          <p id="unifiedMediaResult" class="action-result" aria-live="polite"></p>
+        </article>
       </section>
 
       <section class="configuration-grid view-fragment-grid">
