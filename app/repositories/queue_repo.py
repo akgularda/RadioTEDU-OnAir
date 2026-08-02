@@ -1,3 +1,6 @@
+import hashlib
+
+
 class QueueRepository:
     def __init__(self, conn):
         self.conn = conn
@@ -25,29 +28,63 @@ class QueueRepository:
         )
         return cur.fetchone()
 
-    def enqueue_or_get_existing(
-        self, station_id: int, track_id: int, dedupe_key: str | None = None
-    ) -> tuple[int, bool]:
-        cur = self.conn.cursor()
-        row = self.find_by_dedupe_key(
-            station_id,
-            dedupe_key,
-            statuses=("pending", "playing"),
-        )
-        if row is not None:
-            return int(row["id"]), False
+    def change_sequence(self, station_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT value FROM station_settings WHERE station_id=? AND key='_queue_change_sequence'",
+            (int(station_id),),
+        ).fetchone()
+        try:
+            return max(0, int(str(row["value"] if row else "0")))
+        except (TypeError, ValueError):
+            return 0
 
-        cur.execute(
-            "SELECT COALESCE(MAX(position), 0) + 1 FROM queue_items WHERE station_id=?",
-            (station_id,),
+    def _bump_change_sequence_in_transaction(self, station_id: int) -> int:
+        self.conn.execute(
+            "INSERT INTO station_settings (station_id, key, value, updated_at) VALUES (?, '_queue_change_sequence', '1', CURRENT_TIMESTAMP) "
+            "ON CONFLICT(station_id, key) DO UPDATE SET value=CAST(COALESCE(station_settings.value, '0') AS INTEGER)+1, updated_at=CURRENT_TIMESTAMP",
+            (int(station_id),),
         )
-        pos = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO queue_items (station_id, track_id, position, status, dedupe_key) VALUES (?, ?, ?, 'pending', ?)",
-            (station_id, track_id, pos, dedupe_key),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid), True
+        return self.change_sequence(station_id)
+
+    def enqueue_or_get_existing(
+        self,
+        station_id: int,
+        track_id: int,
+        dedupe_key: str | None = None,
+        *,
+        manage_transaction: bool = True,
+    ) -> tuple[int, bool]:
+        if manage_transaction:
+            self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = self.conn.cursor()
+            row = self.find_by_dedupe_key(
+                station_id,
+                dedupe_key,
+                statuses=("pending", "playing"),
+            )
+            if row is not None:
+                if manage_transaction:
+                    self.conn.commit()
+                return int(row["id"]), False
+
+            cur.execute(
+                "SELECT COALESCE(MAX(position), 0) + 1 FROM queue_items WHERE station_id=?",
+                (station_id,),
+            )
+            pos = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO queue_items (station_id, track_id, position, status, dedupe_key) VALUES (?, ?, ?, 'pending', ?)",
+                (station_id, track_id, pos, dedupe_key),
+            )
+            self._bump_change_sequence_in_transaction(station_id)
+            if manage_transaction:
+                self.conn.commit()
+            return int(cur.lastrowid), True
+        except Exception:
+            if manage_transaction:
+                self.conn.rollback()
+            raise
 
     def enqueue(self, station_id: int, track_id: int, dedupe_key: str | None = None) -> int:
         item_id, _created = self.enqueue_or_get_existing(
@@ -216,6 +253,177 @@ class QueueRepository:
         for idx, row in enumerate(rows, start=1):
             cur.execute("UPDATE queue_items SET position=? WHERE id=?", (idx, int(row["id"])))
         self.conn.commit()
+
+    @staticmethod
+    def active_revision(rows) -> str:
+        """Stable optimistic-concurrency token for the actionable queue state."""
+        material = "|".join(
+            f"{int(row['id'])}:{int(row['position'])}:{str(row['status'])}"
+            for row in rows
+        )
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+    def _reindex_active_in_transaction(self, station_id: int) -> None:
+        cur = self.conn.cursor()
+        for idx, row in enumerate(self.list_active_ordered(station_id), start=1):
+            cur.execute("UPDATE queue_items SET position=? WHERE id=?", (idx, int(row["id"])))
+
+    def delete_pending_item(
+        self,
+        *,
+        station_id: int,
+        item_id: int,
+        expected_revision: str,
+    ) -> str:
+        """Delete one pending item only if the operator snapshot is still current."""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            rows = list(self.list_active_ordered(station_id))
+            if self.active_revision(rows) != str(expected_revision):
+                self.conn.rollback()
+                return "stale"
+            target = next((row for row in rows if int(row["id"]) == int(item_id)), None)
+            if target is None:
+                self.conn.rollback()
+                return "missing"
+            if str(target["status"]) != "pending":
+                self.conn.rollback()
+                return "playing"
+            cur = self.conn.cursor()
+            cur.execute(
+                "DELETE FROM queue_items WHERE id=? AND station_id=? AND status='pending'",
+                (int(item_id), int(station_id)),
+            )
+            if cur.rowcount != 1:
+                self.conn.rollback()
+                return "stale"
+            self._reindex_active_in_transaction(station_id)
+            self._bump_change_sequence_in_transaction(station_id)
+            self.conn.commit()
+            return "ok"
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def move_pending_item(
+        self,
+        *,
+        station_id: int,
+        item_id: int,
+        to_index: int,
+        expected_revision: str,
+    ) -> str:
+        """Move one pending item inside the pending section of a known snapshot."""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            rows = list(self.list_active_ordered(station_id))
+            if self.active_revision(rows) != str(expected_revision):
+                self.conn.rollback()
+                return "stale"
+            from_index = next(
+                (index for index, row in enumerate(rows) if int(row["id"]) == int(item_id)),
+                None,
+            )
+            if from_index is None:
+                self.conn.rollback()
+                return "missing"
+            if str(rows[from_index]["status"]) != "pending":
+                self.conn.rollback()
+                return "playing"
+            pending_indexes = [
+                index for index, row in enumerate(rows) if str(row["status"]) == "pending"
+            ]
+            if int(to_index) not in pending_indexes:
+                self.conn.rollback()
+                return "invalid_destination"
+            target_index = int(to_index)
+            if from_index != target_index:
+                item = rows.pop(from_index)
+                rows.insert(target_index, item)
+                cur = self.conn.cursor()
+                for position, row in enumerate(rows, start=1):
+                    cur.execute(
+                        "UPDATE queue_items SET position=? WHERE id=?",
+                        (position, int(row["id"])),
+                    )
+                self._bump_change_sequence_in_transaction(station_id)
+            self.conn.commit()
+            return "ok"
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def skip_playing_item(
+        self, *, station_id: int, item_id: int, expected_revision: str
+    ) -> str:
+        """Atomically finish a playing row for callers without runtime control."""
+        outcome = self.begin_skip_playing_item(
+            station_id=station_id,
+            item_id=item_id,
+            expected_revision=expected_revision,
+        )
+        if outcome != "ok":
+            return outcome
+        try:
+            return self.commit_skip_playing_item(
+                station_id=station_id,
+                item_id=item_id,
+            )
+        except Exception:
+            self.rollback_skip_playing_item()
+            raise
+
+    def begin_skip_playing_item(
+        self, *, station_id: int, item_id: int, expected_revision: str
+    ) -> str:
+        """Acquire the queue write lock and validate one current row.
+
+        The successful return deliberately leaves ``BEGIN IMMEDIATE`` open.  The
+        operator skip path holds that lock while stopping the old runtime, so no
+        other operator can invalidate the checked revision in between.
+        """
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            rows = list(self.list_active_ordered(station_id))
+            if self.active_revision(rows) != str(expected_revision):
+                self.conn.rollback()
+                return "stale"
+            target = next((row for row in rows if int(row["id"]) == int(item_id)), None)
+            if target is None:
+                self.conn.rollback()
+                return "missing"
+            if str(target["status"]) != "playing":
+                self.conn.rollback()
+                return "not_playing"
+            return "ok"
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def commit_skip_playing_item(self, *, station_id: int, item_id: int) -> str:
+        """Persist a prepared skip and release its transaction."""
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE queue_items SET status='done', finished_at=CURRENT_TIMESTAMP WHERE id=? AND station_id=? AND status='playing'",
+                (int(item_id), int(station_id)),
+            )
+            if cur.rowcount != 1:
+                self.conn.rollback()
+                return "stale"
+            self._bump_change_sequence_in_transaction(station_id)
+            self.conn.commit()
+            return "ok"
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def rollback_skip_playing_item(self) -> None:
+        """Best-effort release for an abandoned prepared operator skip."""
+        try:
+            self.conn.rollback()
+        except Exception:
+            pass
 
     def delete_by_queue_index(self, station_id: int, queue_index: int) -> bool:
         rows = self.list_active_ordered(station_id)

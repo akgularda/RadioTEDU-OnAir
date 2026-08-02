@@ -156,9 +156,10 @@ class PlaylistAutoGeneratePayload(BaseModel):
 
 
 class QueueMovePayload(BaseModel):
-    from_index: int
+    item_id: int
     to_index: int
     station_id: int
+    expected_revision: str = Field(min_length=8, max_length=128)
 
 
 class LegacySchedulePayload(BaseModel):
@@ -2289,10 +2290,85 @@ def _compute_estimated_times(active_rows, crossfade_seconds: float = 0.0):
     return estimates
 
 
+def _queue_mutation_acknowledgement(station_id: int) -> dict:
+    """Publish a durable queue mutation to live observers without guessing playback.
+
+    Queue rows are the worker's source of truth.  This acknowledgement confirms
+    persistence and websocket delivery; it deliberately does not claim that an
+    already-playing audio process was interrupted.
+    """
+    snapshot = None
+    try:
+        snapshot = list_legacy_queue(station_id=int(station_id))
+    except Exception:
+        # The write transaction has already committed.  Do not turn a transient
+        # read-side failure into an apparent failed operator command.
+        snapshot = None
+    delivered = False
+    worker_running = False
+    observed = False
+    target_sequence = int(snapshot.get("sequence") or 0) if snapshot else 0
+    try:
+        from app.ws.broadcaster import broadcaster
+
+        if snapshot is not None:
+            delivered = bool(broadcaster.on_queue_changed(int(station_id), snapshot))
+    except Exception:
+        delivered = False
+    try:
+        from app.api.runtime import worker_loop_manager
+
+        deadline = time.monotonic() + 0.35
+        worker_status = worker_loop_manager.status(int(station_id))
+        worker_running = bool(worker_status.get("running"))
+        while worker_running and int(worker_status.get("last_observed_queue_sequence") or 0) < target_sequence and time.monotonic() < deadline:
+            time.sleep(0.05)
+            worker_status = worker_loop_manager.status(int(station_id))
+            worker_running = bool(worker_status.get("running"))
+        observed = bool(worker_running and int(worker_status.get("last_observed_queue_sequence") or 0) >= target_sequence)
+    except Exception:
+        worker_running = False
+    worker_state = "observed" if observed else ("pending" if worker_running else "not_running")
+    response = {
+        "persistence": {"committed": True},
+        "worker_acknowledgement": {
+            "observed": observed,
+            "state": worker_state,
+            "detail": (
+                "The worker observed this queue revision."
+                if observed
+                else (
+                    "The worker polls the durable queue; it has not acknowledged this revision."
+                    if worker_running
+                    else "The worker is not running; it cannot acknowledge this revision."
+                )
+            ),
+        },
+        "runtime_acknowledgement": {
+            "persisted": True,
+            "queue_event_published": delivered,
+            "worker_running": worker_running,
+            "observed": observed,
+            "current_track_interrupted": False,
+        },
+    }
+    if snapshot is not None:
+        response["queue"] = snapshot
+        response["queue_sequence"] = target_sequence
+    return response
+
+
 @router.get("/api/queue")
 def list_legacy_queue(station_id: int):
     init_db()
     conn = get_connection()
+    try:
+        return _list_legacy_queue_from_connection(conn, station_id)
+    finally:
+        conn.close()
+
+
+def _list_legacy_queue_from_connection(conn, station_id: int):
     repo = QueueRepository(conn)
 
     # Show ~30 min of history (enough for typical track durations)
@@ -2326,7 +2402,13 @@ def list_legacy_queue(station_id: int):
             estimated_time=estimates.get(row["id"], ""),
         ))
 
-    return {"items": items, "total": len(active_rows), "station_id": int(station_id)}
+    return {
+        "items": items,
+        "total": len(active_rows),
+        "station_id": int(station_id),
+        "revision": repo.active_revision(active_rows),
+        "sequence": repo.change_sequence(station_id),
+    }
 
 
 @router.post("/api/queue/refresh")
@@ -2346,14 +2428,30 @@ def refresh_legacy_queue(station_id: int = 1):
 
 
 @router.delete("/api/queue/{queue_index}")
-def delete_legacy_queue_item(queue_index: int, station_id: int):
+def delete_legacy_queue_item(
+    queue_index: int,
+    station_id: int,
+    item_id: int,
+    expected_revision: str,
+):
     init_db()
     conn = get_connection()
     repo = QueueRepository(conn)
-    removed = repo.delete_by_queue_index(station_id=station_id, queue_index=queue_index)
-    if not removed:
-        raise HTTPException(status_code=404, detail="queue item not found")
-    return {"ok": True}
+    try:
+        outcome = repo.delete_pending_item(
+            station_id=station_id,
+            item_id=item_id,
+            expected_revision=expected_revision,
+        )
+        if outcome == "missing":
+            raise HTTPException(status_code=404, detail="queue item not found")
+        if outcome == "playing":
+            raise HTTPException(status_code=409, detail="current playing queue item cannot be removed")
+        if outcome == "stale":
+            raise HTTPException(status_code=409, detail="queue changed; reload before removing an item")
+    finally:
+        conn.close()
+    return {"ok": True, **_queue_mutation_acknowledgement(station_id)}
 
 
 @router.post("/api/queue/move")
@@ -2361,14 +2459,22 @@ def move_legacy_queue_item(payload: QueueMovePayload):
     init_db()
     conn = get_connection()
     repo = QueueRepository(conn)
-    moved = repo.move_by_queue_index(
-        station_id=payload.station_id,
-        from_index=payload.from_index,
-        to_index=payload.to_index,
-    )
-    if not moved:
-        raise HTTPException(status_code=404, detail="queue item not found")
-    return {"ok": True}
+    try:
+        outcome = repo.move_pending_item(
+            station_id=payload.station_id,
+            item_id=payload.item_id,
+            to_index=payload.to_index,
+            expected_revision=payload.expected_revision,
+        )
+        if outcome == "missing":
+            raise HTTPException(status_code=404, detail="queue item not found")
+        if outcome == "playing":
+            raise HTTPException(status_code=409, detail="current playing queue item cannot be moved")
+        if outcome in {"stale", "invalid_destination"}:
+            raise HTTPException(status_code=409, detail="queue changed; reload before reordering items")
+    finally:
+        conn.close()
+    return {"ok": True, **_queue_mutation_acknowledgement(payload.station_id)}
 
 
 @router.get("/api/tracks/stats/summary")

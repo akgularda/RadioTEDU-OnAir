@@ -15,6 +15,10 @@ LIVE_ROOT = (
     / "RadioTEDU"
     / "OnAir"
 )
+SHARED_CONFIG_ROOT = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "RadioTEDU" / "OnAir"
+JWT_SECRET_FILE = Path(os.environ.get("RADIOTEDU_JWT_SECRET_FILE", r"C:\Users\tedu\AppData\Local\RadioTEDU\OnAir\secrets\jwt-signing.key"))
+os.environ.setdefault("CLEANROOM_USER_CONFIG_ROOT", str(SHARED_CONFIG_ROOT))
+os.environ.setdefault("CLEANROOM_JWT_SECRET_FILE", str(JWT_SECRET_FILE))
 DB_PATH = LIVE_ROOT / "cleanroom.db"
 LOG_PATH = LIVE_ROOT / "playout_guard.log"
 LOCK_PATH = LIVE_ROOT / "playout_guard.lock"
@@ -199,7 +203,10 @@ def start_backend() -> int | None:
     env = os.environ.copy()
     env["LOCALAPPDATA"] = str(LIVE_ROOT.parent)
     env["CLEANROOM_DB_PATH"] = str(LIVE_ROOT / "cleanroom.db")
+    env["CLEANROOM_DATA_ROOT"] = str(LIVE_ROOT)
     env["CLEANROOM_TOOLS_DIR"] = str(LIVE_ROOT / "tools")
+    env["CLEANROOM_USER_CONFIG_ROOT"] = str(SHARED_CONFIG_ROOT)
+    env["CLEANROOM_JWT_SECRET_FILE"] = str(JWT_SECRET_FILE)
     # Keep recovery startups short so the guard can bring streams back even
     # when AI preload or prefetch would otherwise stall the backend.
     env["CLEANROOM_FAST_STARTUP"] = "1"
@@ -209,7 +216,14 @@ def start_backend() -> int | None:
     tools_bin = LIVE_ROOT / "tools" / "bin"
     env["PATH"] = str(tools_bin) + os.pathsep + str(env.get("PATH", ""))
 
-    if (APP_INTERNAL / "app" / "main.py").is_file():
+    # Prefer the packaged backend whenever it is present.  The old fallback
+    # Python tree can survive an upgrade under %LocalAppData% and otherwise
+    # shadows the current operator routes/static wall assets.
+    backend_exe = ROOT / "RadioTEDU-OnAir-Backend.exe"
+    if backend_exe.is_file():
+        cmd = [str(backend_exe), "--lifespan", "off"]
+        cwd = ROOT
+    elif (APP_INTERNAL / "app" / "main.py").is_file():
         cmd = [
             _python_executable(),
             "-m",
@@ -226,7 +240,6 @@ def start_backend() -> int | None:
         ]
         cwd = APP_INTERNAL
     else:
-        backend_exe = ROOT / "RadioTEDU-OnAir-Backend.exe"
         cmd = [str(backend_exe), "--lifespan", "off"]
         cwd = ROOT
 

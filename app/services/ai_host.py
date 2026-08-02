@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.audio.audio_processing import probe_duration
+from app.runtime_paths import get_data_dir
 from app.services.music_history import MusicHistoryDB
 from app.services.voice_enhancer import enhance_for_tts
 from app.services.voice_presets import get_instruct_prompt
@@ -34,7 +35,7 @@ _log = logging.getLogger("cleanroom.ai_host")
 BASE_DIR = Path(__file__).resolve().parents[2]
 ROOT_DIR = BASE_DIR.parent
 MODELS_DIR = BASE_DIR / "models"
-CACHE_DIR = BASE_DIR / "data" / "ai_cache"
+CACHE_DIR = get_data_dir() / "ai_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_CLEAR_MARKER = CACHE_DIR / ".cleared_at"
 

@@ -10,6 +10,8 @@ from app.main import app
 
 _PUBLIC_API_PATHS = {
     "/api/health",
+    "/api/health-wall",
+    "/api/monitor/snapshot",
     "/api/auth/login",
     "/api/auth/refresh",
     "/api/public/stations",

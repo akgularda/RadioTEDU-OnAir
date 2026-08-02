@@ -1,4 +1,7 @@
-from app.audio.device_discovery import parse_ffmpeg_dshow_audio_devices
+from app.audio.device_discovery import (
+    parse_ffmpeg_dshow_audio_devices,
+    parse_ffmpeg_dshow_input_devices,
+)
 
 
 def test_parse_ffmpeg_dshow_audio_devices():
@@ -11,3 +14,15 @@ def test_parse_ffmpeg_dshow_audio_devices():
     devices = parse_ffmpeg_dshow_audio_devices(sample)
     assert "Integrated Webcam" in devices
     assert "Speakers (USB Audio)" in devices
+
+
+def test_parse_ffmpeg_dshow_input_devices_only_returns_audio_input_labels():
+    sample = """
+[dshow @ 000001] DirectShow video devices
+[dshow @ 000001]  "Integrated Webcam"
+[dshow @ 000001] DirectShow audio devices
+[dshow @ 000001]  "Studio Microphone (USB Audio)"
+[dshow @ 000001]    Alternative name "@device_cm_{hardware-id}\\\\wave"
+"""
+
+    assert parse_ffmpeg_dshow_input_devices(sample) == ["Studio Microphone (USB Audio)"]

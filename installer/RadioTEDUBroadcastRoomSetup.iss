@@ -35,7 +35,9 @@ SetupIconFile=..\app\static\icons\icon.ico
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
 Name: "startmenuicon"; Description: "Create a Start Menu shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
+Name: "healthwallshortcut"; Description: "Create a read-only Health Wall shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
 Name: "autostart"; Description: "Start RadioTEDU OnAir when you sign in"; GroupDescription: "Startup:"; Flags: checkedonce
+Name: "healthwallautostart"; Description: "Run the read-only Health Wall reliably when you sign in"; GroupDescription: "Startup:"; Flags: checkedonce
 Name: "launch"; Description: "Launch RadioTEDU OnAir after install"; GroupDescription: "After install:"; Flags: checkedonce
 Name: "dotnet"; Description: "Install the optional .NET 8 Desktop Runtime"; GroupDescription: "Optional runtimes:"; Flags: unchecked
 Name: "ollama"; Description: "Install the optional local Ollama AI runtime"; GroupDescription: "Optional runtimes:"; Flags: unchecked
@@ -48,6 +50,7 @@ Source: "..\LICENSE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "EnsureDesktopPrerequisites.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "HardenServiceHostAcl.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "ConfigureHealthWallStartup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "ProvisionBroadcastPcAgents.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "NewBroadcastPcHandoffManifest.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "requirements\radiotedu-handoff-py312.lock.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
@@ -79,9 +82,15 @@ Name: "{commonappdata}\RadioTEDU\OnAir\State\ServiceHost"; Flags: uninsneverunin
 Name: "{autodesktop}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 Name: "{autoprograms}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: startmenuicon
 Name: "{commonstartup}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: autostart
+Name: "{autodesktop}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; Tasks: healthwallshortcut
+Name: "{autoprograms}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; Tasks: healthwallshortcut
 
 [Run]
 Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; Description: "Launch RadioTEDU OnAir"; Flags: nowait postinstall skipifsilent; Tasks: launch
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\installer\ConfigureHealthWallStartup.ps1"" -Mode Install -ShellPath ""{app}\shell\RadioTEDU-OnAir.exe"""; Description: "Configure reliable Health Wall startup"; Flags: runasoriginaluser runhidden waituntilterminated; Tasks: healthwallautostart
+
+[UninstallRun]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\installer\ConfigureHealthWallStartup.ps1"" -Mode Remove"; Flags: runhidden waituntilterminated
 
 [Code]
 procedure RunDesktopPrerequisites(InstallDotNet, InstallOllama: Boolean);

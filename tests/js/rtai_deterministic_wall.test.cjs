@@ -199,6 +199,21 @@ test('multi-station, genre, queue, jingle, emergency, and optional AI controls a
   assert.match(html, /id="aiConfigForm"/);
 });
 
+test('queue actions report durable runtime acknowledgement and refresh the live timeline', () => {
+  assert.match(script, /function queueAcknowledgementText\(outcome\)/);
+  assert.match(script, /Live observers were notified\./);
+  assert.match(script, /has not acknowledged this queue revision yet/);
+  assert.match(script, /data-queue-item-id/);
+  assert.match(scriptSection('async function addTrackToQueue', 'function queueAcknowledgementText'), /renderTimeline\(\)/);
+  const actions = scriptSection('async function queueAction', 'function currentUser');
+  assert.match(actions, /const changed = await verifiedMutation/);
+  assert.match(actions, /item_id: Number\(target\.id\)/);
+  assert.match(actions, /expected_revision: expectedRevision/);
+  assert.match(actions, /item_id=\$\{Number\(target\.id\)\}/);
+  assert.match(actions, /queueAcknowledgementText\(changed\)/);
+  assert.match(actions, /renderTimeline\(\)/);
+});
+
 test('unified media controls show root, linked-view status, refresh history, and safe rebuild action', () => {
   assert.match(html, /id="unifiedMediaRoot"/);
   assert.match(html, /id="unifiedMediaViews"/);

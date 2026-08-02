@@ -9,6 +9,8 @@ READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 _ALL_ROLES = {"admin", "dj", "producer", "viewer"}
 _PUBLIC_API_PATHS = {
     "/api/health",
+    "/api/health-wall",
+    "/api/monitor/snapshot",
     "/api/public/stations",
     "/api/auth/login",
     "/api/auth/refresh",

@@ -17,6 +17,7 @@ from app.api.ai_diagnostics import router as ai_diagnostics_router
 from app.api.auth import router as auth_router
 from app.api.audio import router as audio_router
 from app.api.health import router as health_router
+from app.api.health_wall import router as health_wall_router
 from app.api.integrations import router as integrations_router
 from app.api.legacy import router as legacy_router
 from app.api.library_automation import router as library_automation_router
@@ -364,6 +365,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(health_router)
+app.include_router(health_wall_router)
 app.include_router(integrations_router)
 app.include_router(auth_router)
 app.include_router(users_router)

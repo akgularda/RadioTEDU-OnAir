@@ -108,6 +108,11 @@ class StationWorkerLoopManager:
                     runtime_registry=self.runtime_registry,
                     fallback_uri=fallback_uri,
                 )
+                # Read the durable sequence from this worker's queue connection
+                # before it evaluates the queue.  A later mutation must wait for
+                # a subsequent tick; otherwise an acknowledgement could claim a
+                # revision that this worker has not actually seen.
+                evaluated_sequence = worker.queue_repo.change_sequence(station_id)
                 result = worker.process_once()
                 with self._lock:
                     current = self._loops.get(station_id)
@@ -118,6 +123,7 @@ class StationWorkerLoopManager:
                         current["failure_count"] = 0
                         current["last_backoff_seconds"] = 0.0
                         current["next_attempt_monotonic"] = 0.0
+                        current["last_observed_queue_sequence"] = int(evaluated_sequence)
             except Exception as exc:
                 with self._lock:
                     current = self._loops.get(station_id)
@@ -192,6 +198,7 @@ class StationWorkerLoopManager:
                     "stop_event": stop_event,
                     "thread": None,
                     "ticks": 0,
+                    "last_observed_queue_sequence": 0,
                     "last_result": None,
                     "last_error": "",
                     "failure_count": 0,
@@ -243,6 +250,7 @@ class StationWorkerLoopManager:
                     "failure_count": 0,
                     "last_backoff_seconds": 0.0,
                     "next_attempt_in_seconds": 0.0,
+                    "last_observed_queue_sequence": 0,
                 }
             stop_event: threading.Event = state["stop_event"]
             thread: threading.Thread = state["thread"]
@@ -292,6 +300,7 @@ class StationWorkerLoopManager:
                     0.0,
                     float(state.get("next_attempt_monotonic") or 0.0) - time.monotonic(),
                 ),
+                "last_observed_queue_sequence": int(state.get("last_observed_queue_sequence") or 0),
             }
 
     def snapshot(self) -> list[dict]:

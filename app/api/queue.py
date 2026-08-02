@@ -1,13 +1,13 @@
+import json
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.db import get_connection, init_db
 from app.engine.priority import choose_source
 from app.repositories.ad_break_repo import AdBreakRepository
-from app.repositories.outbox_repo import OutboxRepository
 from app.repositories.queue_repo import QueueRepository
 from app.repositories.schedule_repo import ScheduleRepository
-from app.ws.broadcaster import broadcaster
 
 router = APIRouter()
 
@@ -22,26 +22,53 @@ def push(payload: QueuePush):
     init_db()
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         queue_repo = QueueRepository(conn)
-        outbox_repo = OutboxRepository(conn)
         item_id, created = queue_repo.enqueue_or_get_existing(
             station_id=payload.station_id,
             track_id=payload.track_id,
             dedupe_key=f"queue:{payload.station_id}:{payload.track_id}",
+            manage_transaction=False,
         )
         if created:
-            outbox_repo.enqueue(payload.station_id, "queue_push", payload.model_dump())
+            conn.cursor().execute(
+                "INSERT INTO command_outbox (station_id, command_type, payload_json, status) "
+                "VALUES (?, 'queue_push', ?, 'pending')",
+                (payload.station_id, json.dumps(payload.model_dump())),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
     try:
-        from app.api.legacy import list_legacy_queue
+        from app.api.legacy import _queue_mutation_acknowledgement
 
-        broadcaster.on_queue_changed(payload.station_id, list_legacy_queue(payload.station_id))
+        acknowledgement = _queue_mutation_acknowledgement(payload.station_id)
     except Exception:
-        pass
-
-    return {"ok": True, "item_id": item_id, "deduped": not created}
+        acknowledgement = {
+            "persistence": {"committed": True},
+            "worker_acknowledgement": {
+                "observed": False,
+                "state": "unknown",
+                "detail": "The worker acknowledgement could not be read.",
+            },
+            "runtime_acknowledgement": {
+                "persisted": True,
+                "queue_event_published": False,
+                "worker_running": False,
+                "observed": False,
+                "current_track_interrupted": False,
+            }
+        }
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "deduped": not created,
+        **acknowledgement,
+    }
 
 
 @router.get("/api/playout/state")

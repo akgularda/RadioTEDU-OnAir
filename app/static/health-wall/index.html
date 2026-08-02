@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>RadioTEDU Health Wall</title>
+  <link rel="stylesheet" href="health-wall.css">
+</head>
+<body>
+  <main class="health-wall" aria-labelledby="wallTitle">
+    <header class="wall-header">
+      <div>
+        <p class="eyebrow">RADIOTEDU OPERATIONS</p>
+        <h1 id="wallTitle">Health Wall</h1>
+      </div>
+      <div class="summary-strip" aria-label="Current health summary">
+        <span class="summary-item critical"><b id="criticalCount">0</b> critical</span>
+        <span class="summary-item warning"><b id="warningCount">0</b> warning</span>
+        <span class="summary-item unknown"><b id="unknownCount">0</b> unknown</span>
+      </div>
+      <div class="wall-clock">
+        <time id="localClock">--:--:--</time>
+        <span id="snapshotAge">Waiting for local monitor…</span>
+      </div>
+    </header>
+
+    <section id="connectionBanner" class="connection-banner" role="status">
+      Connecting to the local RadioTEDU monitor…
+    </section>
+
+    <section class="wall-section" aria-labelledby="stationsTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">LIVE PLAYOUT</p><h2 id="stationsTitle">Stations</h2></div>
+        <span id="stationSummary" class="section-note">Discovering configured stations…</span>
+      </div>
+      <div id="stationGrid" class="station-grid skeleton-grid" aria-live="off"></div>
+    </section>
+
+    <section class="wall-section" aria-labelledby="productsTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">INTERACTIVE PRODUCTS</p><h2 id="productsTitle">Juke, Voting and streams</h2></div>
+        <span class="section-note">Health only · no controls</span>
+      </div>
+      <div id="integrationGrid" class="integration-grid"></div>
+    </section>
+
+    <section class="lower-grid">
+      <section class="wall-section" aria-labelledby="catalogTitle">
+        <div class="section-heading compact"><h2 id="catalogTitle">Media databases</h2><span id="catalogPoll" class="section-note"></span></div>
+        <div id="catalogList" class="compact-list"></div>
+      </section>
+      <section class="wall-section" aria-labelledby="servicesTitle">
+        <div class="section-heading compact"><h2 id="servicesTitle">Services and startup</h2></div>
+        <div id="serviceList" class="compact-list"></div>
+      </section>
+    </section>
+
+    <footer class="incident-footer">
+      <b>ACTIVE INCIDENTS</b>
+      <div id="incidentTicker">No current health evidence yet.</div>
+    </footer>
+    <p id="assistiveSummary" class="visually-hidden" aria-live="polite"></p>
+  </main>
+  <script src="health-wall.js" defer></script>
+</body>
+</html>

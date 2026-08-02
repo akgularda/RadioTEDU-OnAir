@@ -34,6 +34,7 @@ const state = {
   audioDevices: [],
   sweeper: null,
   queue: [],
+  queueRevision: '',
   library: [],
   libraryPage: 1,
   libraryPages: 1,
@@ -393,7 +394,7 @@ async function loadStations(preferredId = null) {
 
 async function loadCoreStatus() {
   const sid = state.stationId;
-  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher, unifiedMedia, productCatalog] = await Promise.all([
+  const [health, runtime, ai, sweeper, publicStations, stationSettings, stationOutput, libraryWatcher, productCatalog] = await Promise.all([
     api(`/api/health?station_id=${sid}`),
     api(`/api/runtime/${sid}/status`),
     api(`/api/ai/settings?station_id=${sid}`),
@@ -402,7 +403,6 @@ async function loadCoreStatus() {
     api(`/api/settings/station?station_id=${sid}`),
     api(`/api/stations/output?station_id=${sid}`),
     api('/api/library/watcher/status').catch(() => ({ running: false, profiles: [] })),
-    api('/api/library/unified-media/status').catch(() => ({ root: '', views: [], source_map_configured: false, last_error: '' })),
     api('/api/library/product-catalog/status').catch(() => ({ running: false, products: [] })),
   ]);
   state.health = health;
@@ -413,7 +413,6 @@ async function loadCoreStatus() {
   state.stationSettings = stationSettings?.settings || stationSettings || {};
   state.stationOutput = stationOutput || {};
   state.libraryWatcher = libraryWatcher || { running: false, profiles: [] };
-  state.unifiedMedia = unifiedMedia || { root: '', views: [], source_map_configured: false, last_error: '' };
   state.productCatalog = productCatalog || { running: false, products: [] };
   const publicStation = (publicStations.stations || []).find((station) => Number(station.id) === Number(sid));
   renderCoreStatus(publicStation);
@@ -427,7 +426,7 @@ async function loadCoreStatus() {
 }
 
 async function loadOperatorConfiguration() {
-  const [setupState, devicePayload, integrations, radioteduServices] = await Promise.all([
+  const [setupState, devicePayload, integrations, radioteduServices, unifiedMedia] = await Promise.all([
     api(`/api/setup/state?station_id=${state.stationId}`),
     api('/api/audio/devices').catch(() => ({ devices: [] })),
     api('/api/integrations/radiotedu').catch(() => ({
@@ -441,11 +440,15 @@ async function loadOperatorConfiguration() {
         definitions: [],
         status: [],
       })),
+    // This endpoint summarizes large media views. Load it on explicit
+    // configuration refreshes, never from the five-second live status poll.
+    api('/api/library/unified-media/status').catch(() => ({ root: '', views: [], source_map_configured: false, last_error: '' })),
   ]);
   state.setupState = setupState || {};
   state.audioDevices = Array.isArray(devicePayload?.devices) ? devicePayload.devices : [];
   state.integrations = integrations || {};
   state.radioteduServices = radioteduServices || { services: {}, definitions: [], status: [] };
+  state.unifiedMedia = unifiedMedia || { root: '', views: [], source_map_configured: false, last_error: '' };
   renderOutputConfiguration();
   renderAiConfiguration();
   renderIntegrations();
@@ -925,6 +928,7 @@ function disarmStopBroadcast() {
 async function loadQueue() {
   const payload = await api(`/api/queue?station_id=${state.stationId}`);
   state.queue = Array.isArray(payload?.items) ? payload.items : [];
+  state.queueRevision = String(payload?.revision || '');
   renderQueue();
   renderTimeline();
 }
@@ -950,7 +954,7 @@ function renderQueue() {
     return `<div class="media-row ${current ? 'playing' : ''} ${played ? 'done' : ''}">
       <div class="media-title"><small>${current ? 'Playing now' : played ? 'Played' : item.is_next ? 'Up next' : 'Queued'}</small><b>${escapeHtml(item.title || 'Untitled')}</b><span>${escapeHtml(item.artist || item.track_type || '')}</span></div>
       <div class="row-actions">
-        ${!played && !current && queueIndex >= 0 ? `<button class="icon-button" data-queue-action="up" data-index="${queueIndex}" title="Move up" aria-label="Move ${escapeHtml(item.title)} up" ${queueIndex === firstMovableIndex ? 'disabled' : ''}>↑</button><button class="icon-button" data-queue-action="down" data-index="${queueIndex}" title="Move down" aria-label="Move ${escapeHtml(item.title)} down" ${queueIndex === lastMovableIndex ? 'disabled' : ''}>↓</button><button class="icon-button remove" data-queue-action="remove" data-index="${queueIndex}" title="Remove" aria-label="Remove ${escapeHtml(item.title)}">×</button>` : ''}
+        ${current ? `<button class="icon-button remove" data-queue-skip="${Number(item.id)}" title="Skip current audio" aria-label="Skip ${escapeHtml(item.title)}">Skip</button>` : (!played && queueIndex >= 0 ? `<button class="icon-button" data-queue-action="up" data-queue-item-id="${Number(item.id)}" title="Move up" aria-label="Move ${escapeHtml(item.title)} up" ${queueIndex === firstMovableIndex ? 'disabled' : ''}>↑</button><button class="icon-button" data-queue-action="down" data-queue-item-id="${Number(item.id)}" title="Move down" aria-label="Move ${escapeHtml(item.title)} down" ${queueIndex === lastMovableIndex ? 'disabled' : ''}>↓</button><button class="icon-button remove" data-queue-action="remove" data-queue-item-id="${Number(item.id)}" title="Remove" aria-label="Remove ${escapeHtml(item.title)}">×</button>` : '')}
       </div><input type="hidden" value="${trackId}">
     </div>`;
   }).join('');
@@ -1890,12 +1894,15 @@ async function addTrackToQueue(trackId) {
     }), async () => {
       const queue = await api(`/api/queue?station_id=${state.stationId}`);
       state.queue = queue.items || [];
+      state.queueRevision = String(queue?.revision || '');
       const found = state.queue.some((item) => Number(item.track_id) === Number(trackId) && !item.is_played && String(item.status) !== 'done');
       return { verified: found, value: found };
     }, { attempts: 18, interval: 300, description: 'track in broadcast queue' });
     renderQueue();
+    renderTimeline();
     const deduped = alreadyPending || queued.mutationResult?.deduped;
-    const message = deduped ? 'Track was already pending in the queue; no duplicate was created.' : `Verified: ${track?.title || 'Track'} was added to the queue.`;
+    const summary = queueAcknowledgementText(queued);
+    const message = `${deduped ? 'Track was already pending in the queue; no duplicate was created.' : `Verified: ${track?.title || 'Track'} was added to the queue.`} ${summary}`;
     setResult('queueResult', message, 'success');
     logActivity(message);
     toast(deduped ? 'Already queued' : 'Queue insertion verified');
@@ -1907,24 +1914,43 @@ async function addTrackToQueue(trackId) {
   } finally { setBusy(false); }
 }
 
-async function queueAction(action, index) {
+function queueAcknowledgementText(outcome) {
+  const result = outcome?.mutationResult || outcome;
+  if (outcome?.recoveredTransportError) return 'The saved queue was read back, but live delivery and worker acknowledgement are unknown.';
+  const persistence = result?.persistence;
+  const acknowledgement = result?.runtime_acknowledgement;
+  if (!(persistence?.committed || acknowledgement?.persisted)) return 'The queue change could not be confirmed.';
+  const delivery = acknowledgement.queue_event_published
+    ? 'Live observers were notified.'
+    : 'No live observer delivery was confirmed.';
+  const worker = result?.worker_acknowledgement;
+  if (worker?.observed) return `${delivery} The worker acknowledged this queue revision.`;
+  return worker?.state === 'pending'
+    ? `${delivery} The worker is running, but has not acknowledged this queue revision yet.`
+    : `${delivery} The worker is not running, so this revision is pending.`;
+}
+
+async function queueAction(action, itemId) {
   setBusy(true, action === 'remove' ? 'Removing queue item…' : 'Reordering queue…', 'Saving and reading queue back');
   setResult('queueResult');
   const before = await api(`/api/queue?station_id=${state.stationId}`).catch(() => ({ items: [] }));
   const beforeItems = before.items || [];
-  const target = beforeItems.find((item) => Number(item.queue_index ?? item.index) === Number(index));
+  const target = beforeItems.find((item) => Number(item.id) === Number(itemId));
   try {
-    if (!target?.id) throw new Error('Queue item is no longer available; reload the queue and try again');
-    const toIndex = action === 'up' ? Math.max(0, Number(index) - 1) : Number(index) + 1;
-    await verifiedMutation(async () => {
+    const expectedRevision = String(before?.revision || '');
+    const fromIndex = Number(target?.queue_index ?? target?.index);
+    if (!target?.id || !expectedRevision || !Number.isInteger(fromIndex)) throw new Error('Queue changed or is no longer available; reload and try again');
+    const toIndex = action === 'up' ? Math.max(0, fromIndex - 1) : fromIndex + 1;
+    const changed = await verifiedMutation(async () => {
       if (action === 'remove') {
-        await api(`/api/queue/${index}?station_id=${state.stationId}`, { method: 'DELETE' });
+        await api(`/api/queue/${fromIndex}?station_id=${state.stationId}&item_id=${Number(target.id)}&expected_revision=${encodeURIComponent(expectedRevision)}`, { method: 'DELETE' });
       } else {
-        await api('/api/queue/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ station_id: state.stationId, from_index: Number(index), to_index: toIndex }) });
+        await api('/api/queue/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ station_id: state.stationId, item_id: Number(target.id), to_index: toIndex, expected_revision: expectedRevision }) });
       }
     }, async () => {
       const queue = await api(`/api/queue?station_id=${state.stationId}`);
       state.queue = queue.items || [];
+      state.queueRevision = String(queue?.revision || '');
       if (action === 'remove') {
         const exists = state.queue.some((item) => Number(item.id) === Number(target?.id) && !item.is_played);
         return { verified: !exists, value: queue };
@@ -1933,7 +1959,9 @@ async function queueAction(action, index) {
       return { verified: Number(moved?.queue_index ?? moved?.index) === toIndex, value: queue };
     }, { attempts: 14, interval: 250, description: `queue ${action}` });
     renderQueue();
-    const message = action === 'remove' ? 'Verified: queue item removed.' : 'Verified: queue order changed.';
+    renderTimeline();
+    const summary = queueAcknowledgementText(changed);
+    const message = `${action === 'remove' ? 'Verified: queue item removed.' : 'Verified: queue order changed.'} ${summary}`;
     setResult('queueResult', message, 'success'); logActivity(message); toast(message);
   } catch (error) {
     const message = errorMessage(error); setResult('queueResult', message, 'error'); logActivity(`Queue change failed: ${message}`, 'error'); toast(message, 'error');
@@ -1971,6 +1999,24 @@ function normalizeEmergencyUrl(raw) {
   const parsed = new URL(withScheme);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Emergency Room accepts only http or https pages');
   return parsed.href;
+}
+
+async function skipCurrentQueueItem(itemId) {
+  setBusy(true, 'Skipping current audio…', 'Stopping the scheduler before changing the queue');
+  try {
+    const snapshot = await api(`/api/queue?station_id=${state.stationId}`);
+    const item = (snapshot.items || []).find((entry) => Number(entry.id) === Number(itemId));
+    if (!item?.is_current && String(item?.status) !== 'playing') throw new Error('Current queue item changed; reload and try again');
+    await api(`/api/runtime/${state.stationId}/operator-skip-current`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: Number(itemId), expected_revision: String(snapshot.revision || '') }),
+    });
+    await loadQueue();
+    const message = 'Current audio was skipped safely. The scheduler resumed and will select the next item.';
+    setResult('queueResult', message, 'success'); toast(message); logActivity(message);
+  } catch (error) {
+    const message = errorMessage(error); setResult('queueResult', message, 'error'); toast(message, 'error');
+  } finally { setBusy(false); }
 }
 
 function clearEmergencyArm() {
@@ -2763,7 +2809,9 @@ function bindEvents() {
     const add = event.target.closest('[data-add-track]');
     if (add) addTrackToQueue(Number(add.dataset.addTrack));
     const queueButton = event.target.closest('[data-queue-action]');
-    if (queueButton) queueAction(queueButton.dataset.queueAction, Number(queueButton.dataset.index));
+    if (queueButton) queueAction(queueButton.dataset.queueAction, Number(queueButton.dataset.queueItemId));
+    const skipButton = event.target.closest('[data-queue-skip]');
+    if (skipButton) skipCurrentQueueItem(Number(skipButton.dataset.queueSkip));
     const serviceButton = event.target.closest('[data-service-action]');
     if (serviceButton) controlRadioTEDUService(serviceButton);
     const servicePathButton = event.target.closest('[data-service-path]');

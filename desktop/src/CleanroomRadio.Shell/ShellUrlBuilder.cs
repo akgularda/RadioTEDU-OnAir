@@ -8,4 +8,11 @@ public static class ShellUrlBuilder
 
         return $"{baseUrl.TrimEnd('/')}/static/deterministic-wall/index.html";
     }
+
+    public static string BuildHealthWallUrl(string baseUrl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+
+        return $"{baseUrl.TrimEnd('/')}/static/health-wall/index.html";
+    }
 }

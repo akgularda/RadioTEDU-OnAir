@@ -12,4 +12,12 @@ public class ShellUrlBuilderTests
 
         Assert.Equal("http://127.0.0.1:8100/static/deterministic-wall/index.html", url);
     }
+
+    [Fact]
+    public void BuildHealthWallUrl_TargetsDedicatedWallPage()
+    {
+        var url = ShellUrlBuilder.BuildHealthWallUrl("http://127.0.0.1:8100");
+
+        Assert.Equal("http://127.0.0.1:8100/static/health-wall/index.html", url);
+    }
 }

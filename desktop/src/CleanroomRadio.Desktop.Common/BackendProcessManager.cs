@@ -23,6 +23,11 @@ public static class BackendProcessManager
         startInfo.EnvironmentVariables["CLEANROOM_HOST"] = "127.0.0.1";
         startInfo.EnvironmentVariables["CLEANROOM_PORT"] = options.Port.ToString(CultureInfo.InvariantCulture);
         startInfo.EnvironmentVariables["CLEANROOM_DB_PATH"] = options.DatabasePath;
+        // Keep the frozen backend's writable runtime data (AI cache, generated
+        // state, and logs) under ProgramData instead of the read-only install
+        // directory.  Without this, the packaged backend can crash on startup
+        // when it tries to create _internal/data/ai_cache.
+        startInfo.EnvironmentVariables["CLEANROOM_DATA_ROOT"] = options.DataRoot;
 
         return startInfo;
     }

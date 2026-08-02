@@ -88,9 +88,11 @@ def managed_tools_dir() -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
     if getattr(sys, "frozen", False):
-        # Runtime binaries are immutable application payloads. They belong next
-        # to the packaged backend under Program Files, never in AppData.
-        return (Path(sys.executable).resolve().parent / "tools").resolve()
+        # Program Files is immutable at runtime. Keep managed/downloaded tools
+        # beside the selected database so commissioned instances stay isolated.
+        from app.config import get_db_path
+
+        return (get_db_path().parent / "tools").resolve()
     return (Path(__file__).resolve().parents[1] / "tools").resolve()
 
 

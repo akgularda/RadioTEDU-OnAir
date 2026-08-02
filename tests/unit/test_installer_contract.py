@@ -21,6 +21,14 @@ def test_installer_setup_supports_scope_shortcuts_launch_and_bootstrap():
     assert 'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce' in text
     assert 'Name: "startmenuicon"' in text
     assert 'Name: "autostart"' in text
+    assert 'Name: "healthwallshortcut"; Description: "Create a read-only Health Wall shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce' in text
+    assert 'Name: "healthwallautostart"; Description: "Run the read-only Health Wall reliably when you sign in"; GroupDescription: "Startup:"; Flags: checkedonce' in text
+    assert 'Name: "{autodesktop}\\RadioTEDU Health Wall"; Filename: "{app}\\shell\\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"' in text
+    assert 'Name: "{commonstartup}\\RadioTEDU Health Wall"' not in text
+    assert 'Source: "ConfigureHealthWallStartup.ps1"; DestDir: "{app}\\installer"' in text
+    assert 'ConfigureHealthWallStartup.ps1"" -Mode Install -ShellPath ""{app}\\shell\\RadioTEDU-OnAir.exe""' in text
+    assert '[UninstallRun]' in text
+    assert 'ConfigureHealthWallStartup.ps1"" -Mode Remove' in text
     assert "RadioTEDU-OnAir-Agent.exe" in text
     assert "..\\dist\\desktop\\shell\\*" in text
     assert "EnsureDesktopPrerequisites.ps1" in text
@@ -45,6 +53,19 @@ def test_installer_setup_supports_scope_shortcuts_launch_and_bootstrap():
     assert "..\\release\\prerequisites\\python-embed-amd64.zip" in text
     assert "..\\release\\prerequisites\\qwen3-tts-voice-design.zip" in text
     assert "postinstall" in text.lower()
+
+
+def test_health_wall_task_contract_is_delayed_single_instance_and_restartable():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "installer" / "ConfigureHealthWallStartup.ps1").read_text(encoding="utf-8")
+
+    assert "New-ScheduledTaskTrigger -AtLogOn -User $identity" in text
+    assert "$trigger.Delay = 'PT30S'" in text
+    assert "-LogonType Interactive -RunLevel Limited" in text
+    assert "-RestartCount 999" in text
+    assert "-RestartInterval (New-TimeSpan -Minutes 1)" in text
+    assert "-MultipleInstances IgnoreNew" in text
+    assert "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false" in text
 
 
 def test_official_desktop_bundle_requires_self_contained_publish():

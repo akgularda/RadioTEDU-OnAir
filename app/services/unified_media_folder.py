@@ -105,21 +105,25 @@ class UnifiedMediaFolderService:
     def status(self) -> dict[str, Any]:
         manifest = read_json_object(self.manifest_path)
         refresh_status = read_json_object(self.status_path)
+        manifest_counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
         views = []
         for view, relative in VIEW_DIRECTORIES.items():
             target = self._resolve_relative(relative, field="view")
+            view_counts = manifest_counts.get(view, {}) or {}
+            generated_count = int(view_counts.get("generated", 0))
+            operator_count = int(view_counts.get("operator", 0))
             views.append(
                 {
                     "view": view,
                     "directory": relative.replace("/", "\\"),
                     "exists": self._is_dir(target),
-                    "file_count": self._file_count(target),
-                    "generated_count": int((manifest.get("counts", {}).get(view, {}) or {}).get("generated", 0))
-                    if isinstance(manifest, dict)
-                    else 0,
-                    "operator_count": int((manifest.get("counts", {}).get(view, {}) or {}).get("operator", 0))
-                    if isinstance(manifest, dict)
-                    else 0,
+                    # Status is polled by the operator every few seconds.  Use
+                    # the last published manifest instead of recursively walking
+                    # every media view on each request; refresh() updates these
+                    # counts atomically when a new view is published.
+                    "file_count": generated_count + operator_count,
+                    "generated_count": generated_count,
+                    "operator_count": operator_count,
                 }
             )
         return {
