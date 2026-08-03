@@ -11,7 +11,7 @@ from pathlib import Path
 from app.config import get_data_root, get_db_path
 from app.auth.permissions import GLOBAL_PERMISSION_KEYS, SHOW_PERMISSION_KEYS
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 14
 _INIT_LOCK = threading.Lock()
 _HEALTH_LOCK = threading.Lock()
 _HEALTH_CACHE: dict[str, object] = {"checked_at": 0.0, "path": "", "value": {}}
@@ -38,6 +38,7 @@ _LEGACY_ROLE_TEMPLATE_PERMISSIONS = {
         "program.panel.open",
         "shows.view",
         "logs.view",
+        "stream.configure_basic",
     },
     "Legacy Producer": {
         "library.view",
@@ -1321,6 +1322,103 @@ def _bootstrap_schema(cur) -> None:
         "CREATE TABLE IF NOT EXISTS operation_logs (id INTEGER PRIMARY KEY, station_id INTEGER, level TEXT NOT NULL DEFAULT 'info', event_type TEXT NOT NULL DEFAULT 'operation', message TEXT NOT NULL DEFAULT '', payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
     cur.execute(
+        "CREATE TABLE IF NOT EXISTS audit_chain ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, station_id INTEGER, category TEXT NOT NULL, "
+        "action TEXT NOT NULL, actor_id INTEGER, payload_json TEXT NOT NULL DEFAULT '{}', "
+        "previous_hash TEXT NOT NULL DEFAULT '', entry_hash TEXT NOT NULL UNIQUE, "
+        "witness_anchor TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS witness_audit_anchors ("
+        "entry_hash TEXT PRIMARY KEY, node_id TEXT NOT NULL, signature TEXT NOT NULL, "
+        "anchored_at TEXT NOT NULL, received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS ha_state ("
+        "id INTEGER PRIMARY KEY CHECK(id=1), current_term INTEGER NOT NULL DEFAULT 0, "
+        "voted_for TEXT NOT NULL DEFAULT '', leader_id TEXT NOT NULL DEFAULT '', "
+        "leader_lease_expires_at REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "INSERT INTO ha_state(id) VALUES (1) ON CONFLICT(id) DO NOTHING"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS replication_journal ("
+        "sequence INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT NOT NULL, "
+        "entity_id TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "checksum TEXT NOT NULL UNIQUE, replicated_at TEXT, applied_at TEXT, committed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    # A short-lived pre-release v13 build created this table without the
+    # standby-application marker.  Keep bootstrap idempotent for those nodes.
+    cur.execute("PRAGMA table_info(replication_journal)")
+    replication_columns = {str(row[1]) for row in cur.fetchall()}
+    if "applied_at" not in replication_columns:
+        cur.execute("ALTER TABLE replication_journal ADD COLUMN applied_at TEXT")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS media_manifests ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, node_id TEXT NOT NULL, root_path TEXT NOT NULL, "
+        "manifest_hash TEXT NOT NULL, item_count INTEGER NOT NULL DEFAULT 0, total_bytes INTEGER NOT NULL DEFAULT 0, "
+        "payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS ha_playout_checkpoints ("
+        "station_id INTEGER PRIMARY KEY, node_id TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "checksum TEXT NOT NULL, checkpointed_at REAL NOT NULL, received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS recovery_points ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, tier TEXT NOT NULL, file_path TEXT NOT NULL UNIQUE, "
+        "sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, integrity_status TEXT NOT NULL, "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, verified_at TEXT)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS stream_config_drafts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, station_id INTEGER NOT NULL REFERENCES stations(id) ON DELETE CASCADE, "
+        "revision INTEGER NOT NULL DEFAULT 1, config_json TEXT NOT NULL, config_hash TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'draft', validation_json TEXT NOT NULL DEFAULT '{}', "
+        "created_by INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS stream_config_operations ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, draft_id INTEGER NOT NULL REFERENCES stream_config_drafts(id), "
+        "station_id INTEGER NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL, "
+        "previous_config_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}', "
+        "created_by INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guest_invites ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, studio_id INTEGER NOT NULL REFERENCES studios(id) ON DELETE CASCADE, "
+        "station_id INTEGER NOT NULL REFERENCES stations(id) ON DELETE CASCADE, token_hash TEXT NOT NULL UNIQUE, "
+        "created_by INTEGER NOT NULL, expires_at TEXT NOT NULL, redeemed_at TEXT, revoked_at TEXT, "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guest_sessions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, invite_id INTEGER NOT NULL REFERENCES guest_invites(id) ON DELETE CASCADE, "
+        "studio_id INTEGER NOT NULL, station_id INTEGER NOT NULL, display_name TEXT NOT NULL, "
+        "session_token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'lobby', "
+        "is_connected INTEGER NOT NULL DEFAULT 0, is_muted INTEGER NOT NULL DEFAULT 0, "
+        "is_on_air INTEGER NOT NULL DEFAULT 0, gain_db REAL NOT NULL DEFAULT 0, "
+        "connection_quality TEXT NOT NULL DEFAULT 'unknown', admitted_at TEXT, left_at TEXT, "
+        "last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guest_recordings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, studio_id INTEGER NOT NULL, station_id INTEGER NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'pending_consent', manifest_json TEXT NOT NULL DEFAULT '{}', "
+        "file_path TEXT NOT NULL DEFAULT '', started_by INTEGER NOT NULL, started_at TEXT, stopped_at TEXT, "
+        "expires_at TEXT, interruption_reason TEXT NOT NULL DEFAULT '', "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guest_recording_consents ("
+        "recording_id INTEGER NOT NULL REFERENCES guest_recordings(id) ON DELETE CASCADE, "
+        "session_id INTEGER NOT NULL REFERENCES guest_sessions(id) ON DELETE CASCADE, "
+        "decision TEXT NOT NULL DEFAULT 'pending', decided_at TEXT, "
+        "PRIMARY KEY(recording_id, session_id))"
+    )
+    cur.execute(
         "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, station_id INTEGER NOT NULL, event_type TEXT NOT NULL DEFAULT 'generic', payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
     cur.execute(
@@ -1373,6 +1471,12 @@ def _bootstrap_schema(cur) -> None:
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_operation_logs_station_created ON operation_logs(station_id, created_at DESC)"
     )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_chain_station_id ON audit_chain(station_id, id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_replication_pending ON replication_journal(replicated_at, sequence)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_stream_drafts_station ON stream_config_drafts(station_id, id DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_guest_invites_studio ON guest_invites(studio_id, id DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_guest_sessions_studio_status ON guest_sessions(studio_id, status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_guest_recordings_station ON guest_recordings(station_id, id DESC)")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_events_station_created ON events(station_id, created_at DESC)"
     )

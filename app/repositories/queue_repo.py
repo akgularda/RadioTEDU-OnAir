@@ -54,7 +54,8 @@ class QueueRepository:
         *,
         manage_transaction: bool = True,
     ) -> tuple[int, bool]:
-        if manage_transaction:
+        owns_transaction = bool(manage_transaction and not self.conn.in_transaction)
+        if owns_transaction:
             self.conn.execute("BEGIN IMMEDIATE")
         try:
             cur = self.conn.cursor()
@@ -64,7 +65,7 @@ class QueueRepository:
                 statuses=("pending", "playing"),
             )
             if row is not None:
-                if manage_transaction:
+                if owns_transaction:
                     self.conn.commit()
                 return int(row["id"]), False
 
@@ -78,11 +79,11 @@ class QueueRepository:
                 (station_id, track_id, pos, dedupe_key),
             )
             self._bump_change_sequence_in_transaction(station_id)
-            if manage_transaction:
+            if owns_transaction:
                 self.conn.commit()
             return int(cur.lastrowid), True
         except Exception:
-            if manage_transaction:
+            if owns_transaction:
                 self.conn.rollback()
             raise
 

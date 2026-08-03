@@ -112,7 +112,12 @@ class StationWorkerLoopManager:
                 # before it evaluates the queue.  A later mutation must wait for
                 # a subsequent tick; otherwise an acknowledgement could claim a
                 # revision that this worker has not actually seen.
-                evaluated_sequence = worker.queue_repo.change_sequence(station_id)
+                queue_repo = getattr(worker, "queue_repo", None)
+                evaluated_sequence = (
+                    queue_repo.change_sequence(station_id)
+                    if queue_repo is not None
+                    else int(current_state.get("last_observed_queue_sequence") or 0)
+                )
                 result = worker.process_once()
                 with self._lock:
                     current = self._loops.get(station_id)

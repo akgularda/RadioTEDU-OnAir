@@ -33,12 +33,16 @@ def readiness():
             "integrity": "unavailable",
             "error": f"{type(exc).__name__}: {exc}",
         }
+    from app.services.ha_coordinator import ha_coordinator
+    ha = ha_coordinator.snapshot()
     ready = bool(database.get("healthy"))
     payload = {
         "status": "ok" if ready else "unavailable",
         "state": "operational" if ready else "critical",
         "ready": ready,
         "database": database,
+        "high_availability": ha,
+        "broadcast_safe": bool(ha.get("safe_to_broadcast")),
     }
     return JSONResponse(payload, status_code=200 if ready else 503)
 
@@ -143,6 +147,10 @@ def health(station_id: int | None = None):
     tracks_in_library = int(cur.fetchone()["c"])
 
     data_root = get_db_path().parent
+    from app.audio.guest_audio_registry import guest_audio_registry
+    from app.services.audit_chain import audit_chain
+    from app.services.ha_coordinator import ha_coordinator
+
     payload = {
         "status": "ok" if bool(database.get("healthy")) else "degraded",
         "overall_state": str(database.get("state") or "unknown"),
@@ -166,6 +174,9 @@ def health(station_id: int | None = None):
         "setup_dependencies": dependency_state,
         "runtime_registry": runtime_registry.snapshot(),
         "worker_loops": worker_loop_manager.snapshot(),
+        "high_availability": ha_coordinator.snapshot(),
+        "audit_chain": audit_chain.verify(),
+        "guest_audio": guest_audio_registry.snapshots(sid),
         "dependencies": {
             "ffmpeg": describe_dependency("ffmpeg.exe", "ffmpeg"),
             "ffplay": describe_dependency("ffplay.exe", "ffplay"),

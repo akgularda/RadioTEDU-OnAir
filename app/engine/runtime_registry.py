@@ -854,6 +854,16 @@ class StationRuntimeRegistry:
                     exc,
                 )
 
+    def promote_live_mix(self, station_id: int) -> bool:
+        runtime = self._runtimes.get(int(station_id))
+        if runtime is None:
+            return False
+        promote = getattr(runtime, "promote_live_mix", None)
+        if not callable(promote):
+            return False
+        promote()
+        return True
+
     @staticmethod
     def _default_output_settings(station_id: int) -> dict:
         sid = int(station_id)
@@ -1268,6 +1278,7 @@ class StationRuntimeRegistry:
                     attempt_count - 1,
                     len(_OUTPUT_RECOVERY_DELAYS_SECONDS) - 1,
                 )
+
             ]
             error_code = self._recovery_error_code(exc)
             with self._recovery_lock:

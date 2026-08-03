@@ -25,7 +25,7 @@ def aiortc_available() -> bool:
 class RtcMicSession:
     """WebRTC-based mic session with the same read_pcm() interface as MicSession."""
 
-    def __init__(self, station_id: int, max_buffer_bytes: int = 96000) -> None:
+    def __init__(self, station_id: int, max_buffer_bytes: int = 96000, return_track=None) -> None:
         self.station_id = int(station_id)
         self.max_buffer_bytes = max(1, int(max_buffer_bytes))
         self._pc = None
@@ -39,6 +39,7 @@ class RtcMicSession:
         self._peak_db = -60.0
         self._last_error = ""
         self._on_connection_failed = None
+        self._return_track = return_track
 
     @property
     def running(self) -> bool:
@@ -110,6 +111,8 @@ class RtcMicSession:
 
         offer = RTCSessionDescription(sdp=sdp, type="offer")
         await self._pc.setRemoteDescription(offer)
+        if self._return_track is not None:
+            self._pc.addTrack(self._return_track)
         answer = await self._pc.createAnswer()
         await self._pc.setLocalDescription(answer)
         self._running = True

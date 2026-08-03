@@ -18,6 +18,7 @@ def test_global_permission_catalog_shape_is_fixed():
         "shows": frozenset({"shows.view", "shows.manage", "show.assign.manage"}),
         "users": frozenset({"users.manage", "users.reset_password"}),
         "roles": frozenset({"roles.manage"}),
+        "stream": frozenset({"stream.configure_basic", "stream.configure_advanced", "stream.failover"}),
     }
 
 
@@ -55,6 +56,9 @@ def test_global_permission_keys_are_flattened_and_unique():
         "users.manage",
         "users.reset_password",
         "roles.manage",
+        "stream.configure_basic",
+        "stream.configure_advanced",
+        "stream.failover",
     }
     assert len(flattened_permissions) == len(set(flattened_permissions)) == len(GLOBAL_PERMISSION_KEYS)
 
@@ -70,6 +74,8 @@ def test_show_permission_keys_are_fixed():
         "show.jingle_manage",
         "show.break_control",
         "show.end",
+        "show.guest_manage",
+        "show.guest_record",
     })
 
 

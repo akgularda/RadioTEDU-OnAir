@@ -2,6 +2,20 @@ class ScheduleRepository:
     def __init__(self, conn):
         self.conn = conn
 
+    @staticmethod
+    def _require_safe_mutation() -> None:
+        from app.services.ha_coordinator import ha_coordinator
+        ha_coordinator.require_safe_mutation()
+
+    @staticmethod
+    def _replicate(schedule_id: int, operation: str, payload: dict) -> None:
+        from app.services.ha_coordinator import ha_coordinator
+        from app.services.replication_journal import replication_journal
+
+        journal = replication_journal.append("schedule", int(schedule_id), operation, payload)
+        if ha_coordinator.snapshot()["enabled"]:
+            ha_coordinator.replicate_ordered(through_sequence=int(journal["sequence"]))
+
     def enqueue(
         self,
         station_id: int,
@@ -10,6 +24,7 @@ class ScheduleRepository:
         window_end: str | None = None,
         event_name: str = "",
     ) -> int:
+        self._require_safe_mutation()
         cur = self.conn.cursor()
         cur.execute(
             "INSERT INTO schedule_items "
@@ -18,7 +33,10 @@ class ScheduleRepository:
             (station_id, track_id, play_at, window_end, str(event_name or "")),
         )
         self.conn.commit()
-        return int(cur.lastrowid)
+        schedule_id = int(cur.lastrowid)
+        row = self.get(schedule_id)
+        self._replicate(schedule_id, "upsert", dict(row))
+        return schedule_id
 
     def next_ready(self, station_id: int):
         cur = self.conn.cursor()
@@ -82,6 +100,7 @@ class ScheduleRepository:
         window_end: str | None = None,
         event_name: str = "",
     ) -> bool:
+        self._require_safe_mutation()
         cur = self.conn.cursor()
         cur.execute(
             "UPDATE schedule_items SET station_id=?, track_id=?, play_at=?, "
@@ -96,13 +115,22 @@ class ScheduleRepository:
             ),
         )
         self.conn.commit()
-        return cur.rowcount > 0
+        changed = cur.rowcount > 0
+        if changed:
+            row = self.get(schedule_id)
+            self._replicate(schedule_id, "upsert", dict(row))
+        return changed
 
     def delete(self, schedule_id: int) -> bool:
+        self._require_safe_mutation()
+        existing = self.get(schedule_id)
         cur = self.conn.cursor()
         cur.execute("DELETE FROM schedule_items WHERE id=?", (int(schedule_id),))
         self.conn.commit()
-        return cur.rowcount > 0
+        changed = cur.rowcount > 0
+        if changed:
+            self._replicate(schedule_id, "delete", {"id": int(schedule_id), "station_id": int(existing["station_id"]) if existing else 0})
+        return changed
 
     def mark_playing(self, item_id: int) -> None:
         cur = self.conn.cursor()

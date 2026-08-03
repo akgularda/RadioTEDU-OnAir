@@ -88,11 +88,9 @@ def managed_tools_dir() -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
     if getattr(sys, "frozen", False):
-        # Program Files is immutable at runtime. Keep managed/downloaded tools
-        # beside the selected database so commissioned instances stay isolated.
-        from app.config import get_db_path
-
-        return (get_db_path().parent / "tools").resolve()
+        # A frozen deployment must use the tools shipped with the signed bundle.
+        # Do not silently substitute writable per-database binaries.
+        return (Path(sys.executable).resolve().parent / "tools").resolve()
     return (Path(__file__).resolve().parents[1] / "tools").resolve()
 
 

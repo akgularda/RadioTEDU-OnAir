@@ -22,7 +22,10 @@ class SecurityDefaultTests(unittest.TestCase):
     def test_jwt_secret_is_persistent_per_install_secret(self):
         with tempfile.TemporaryDirectory() as tmp:
             data_root = Path(tmp)
-            with patch.dict(os.environ, {"JWT_SECRET_KEY": ""}):
+            with patch.dict(
+                os.environ,
+                {"JWT_SECRET_KEY": "", "CLEANROOM_JWT_SECRET_FILE": ""},
+            ):
                 with patch.object(app_config, "get_user_config_root", return_value=data_root):
                     first = app_config.get_jwt_secret_key()
                     second = app_config.get_jwt_secret_key()

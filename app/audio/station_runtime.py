@@ -333,6 +333,20 @@ class StationRuntime:
                     self._router.set_branch_health(branch, False)
         if wrote_any and program_data:
             self._last_program_pcm_monotonic = time.monotonic()
+            station_id = self._live_station_id()
+            if station_id is not None:
+                try:
+                    from app.audio.guest_audio_registry import guest_audio_registry
+                    from app.services.program_recording import program_recording_service
+
+                    guest_audio_registry.publish_program_pcm(
+                        station_id,
+                        chunk,
+                        voice_gain=float(self._live_audio_settings().get("mic_gain", 1.0)),
+                    )
+                    program_recording_service.publish_pcm(station_id, chunk)
+                except Exception:
+                    pass
 
     def _silence_floor_loop(self) -> None:
         silence = b"\x00" * _SILENCE_FLOOR_CHUNK_BYTES
@@ -714,7 +728,15 @@ class StationRuntime:
 
     def _should_use_live_mix(self) -> bool:
         snapshot = self._live_snapshot()
-        return bool(snapshot.get("transmitting") or snapshot.get("active_user"))
+        if bool(snapshot.get("transmitting") or snapshot.get("active_user")):
+            return True
+        try:
+            from app.audio.guest_audio_registry import guest_audio_registry
+
+            station_id = self._live_station_id()
+            return station_id is not None and guest_audio_registry.has_on_air(station_id)
+        except Exception:
+            return False
 
     def _live_audio_settings(self) -> dict[str, float | str]:
         station_id = self._live_station_id()
@@ -764,6 +786,17 @@ class StationRuntime:
             chunk, self._pcm_output_targets(), generation=generation
         )
 
+    @staticmethod
+    def _sum_mono_pcm(left: bytes, right: bytes) -> bytes:
+        length = max(len(left), len(right))
+        output = bytearray(length)
+        for offset in range(0, length - 1, 2):
+            a = int.from_bytes(left[offset : offset + 2], "little", signed=True) if offset + 2 <= len(left) else 0
+            b = int.from_bytes(right[offset : offset + 2], "little", signed=True) if offset + 2 <= len(right) else 0
+            value = max(-32768, min(32767, a + b))
+            output[offset : offset + 2] = value.to_bytes(2, "little", signed=True)
+        return bytes(output)
+
     def _live_mix_loop(self, producer, generation: int) -> None:
         stdout = getattr(producer, "stdout", None)
         if stdout is None:
@@ -780,6 +813,15 @@ class StationRuntime:
                     time.sleep(0.01)
                     continue
                 mic_pcm = self._read_live_mic_pcm(len(chunk) // 2)
+                try:
+                    from app.audio.guest_audio_registry import guest_audio_registry
+
+                    guest_pcm = guest_audio_registry.read_on_air_pcm(
+                        int(self._live_station_id() or 0), len(chunk) // 2
+                    )
+                    mic_pcm = self._sum_mono_pcm(mic_pcm, guest_pcm)
+                except Exception:
+                    pass
                 effect_pcm = self._sound_effect_player.read_pcm(len(chunk) // 2)
                 mixed = self._live_audio_mixer.mix_pcm_chunk(
                     chunk,
@@ -1285,6 +1327,13 @@ class StationRuntime:
         return self.status()
 
     def stop(self) -> None:
+        station_id = self._live_station_id()
+        if station_id is not None:
+            try:
+                from app.services.program_recording import program_recording_service
+                program_recording_service.interrupt_station(station_id, "runtime_stopped")
+            except Exception:
+                pass
         self._stop_silence_floor_worker()
         self._stop_producers()
         self._stop_sinks()

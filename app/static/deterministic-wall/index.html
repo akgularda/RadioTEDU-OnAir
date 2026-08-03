@@ -267,28 +267,48 @@
             <div><div class="eyebrow">CURRENT STATION</div><h2>Identity and broadcast output</h2></div>
             <div id="outputConfigState" class="mini-state">Loading</div>
           </div>
-          <p class="card-copy">Edit the selected station in place. Saving applies the output configuration and verifies the stored values; testing confirms that the destination is reachable.</p>
+          <p class="card-copy">Use the guided checks below. Your current stream stays unchanged unless every required safety check passes.</p>
           <form id="currentOutputForm" class="operator-form">
-            <div class="field-grid two">
-              <label>Station name<input id="currentStationName" required maxlength="80"></label>
-              <label>Output gain (dB)<input id="currentOutputGain" type="number" min="-30" max="12" step="0.5" value="0"></label>
-            </div>
-            <label class="switch-row"><span><b>Icecast stream</b><small>Send this station to its public mount</small></span><input id="currentIcecastEnabled" type="checkbox" checked></label>
-            <div id="currentIcecastFields" class="field-grid">
-              <label>Host<input id="currentIcecastHost" required></label>
-              <label>Port<input id="currentIcecastPort" type="number" min="1" max="65535" required></label>
-              <label>Mount<input id="currentIcecastMount" pattern="/.*" required></label>
-              <label>Source user<input id="currentIcecastUser" required></label>
-              <label>Source password<input id="currentIcecastPassword" type="password" autocomplete="new-password"></label>
-              <label>Codec<select id="currentIcecastProfile"><option value="aac_plus_196">AAC+ 196 kbps</option><option value="mp3_128">MP3 128 kbps</option></select></label>
-              <label class="switch-row"><span><b>TLS encryption</b><small>Required for secure source ports such as 443</small></span><input id="currentIcecastTlsEnabled" type="checkbox"></label>
-            </div>
-            <label class="switch-row"><span><b>Local monitor</b><small>Also play this station through a selected local audio device</small></span><input id="currentLocalEnabled" type="checkbox"></label>
-            <label id="currentDeviceLabel">Monitor device<select id="currentOutputDevice"><option value="">Choose an output device</option></select></label>
-            <div class="button-row">
-              <button id="saveCurrentOutputButton" class="button primary" type="submit">Save, apply, and verify output</button>
-              <button id="testCurrentOutputButton" class="button secondary" type="button">Test stream destination</button>
-            </div>
+            <section class="stream-wizard-step">
+              <div class="eyebrow">STEP 1 OF 4</div><h3>Where should this station broadcast?</h3>
+              <label>Destination<select id="streamWizardDestination"><option value="saved">Use this station's saved destination</option><option value="new">New Icecast destination</option></select></label>
+              <label>Station name<input id="currentStationName" required maxlength="80" placeholder="Example: RadioTEDU Main"></label>
+            </section>
+            <section class="stream-wizard-step">
+              <div class="eyebrow">STEP 2 OF 4</div><h3>Choose listener quality</h3>
+              <label>Quality<select id="currentIcecastProfile"><option value="mp3_128">Most compatible — MP3 128 kbps</option><option value="aac_plus_196">Higher quality — AAC+ 196 kbps</option></select></label>
+              <small>Most compatible works on the widest range of radios and connections. Higher quality uses more bandwidth.</small>
+            </section>
+            <section class="stream-wizard-step">
+              <div class="eyebrow">STEP 3 OF 4</div><h3>Enter the connection supplied by your stream host</h3>
+              <label class="switch-row"><span><b>Internet stream</b><small>Send this station to listeners</small></span><input id="currentIcecastEnabled" type="checkbox" checked></label>
+              <div id="currentIcecastFields" class="field-grid">
+                <label>Broadcast address<input id="currentIcecastHost" required placeholder="stream.example.org"></label>
+                <label>Stream name / mount<input id="currentIcecastMount" pattern="/.*" required placeholder="/live"></label>
+                <label>Source username<input id="currentIcecastUser" required placeholder="source"></label>
+                <label>Source password<input id="currentIcecastPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved password"></label>
+              </div>
+              <small id="streamDestinationProtection">Destination details are protected. Basic operators can safely change the quality preset without exposing credentials.</small>
+              <details id="streamAdvancedSettings">
+                <summary>Advanced settings — trained operators only</summary>
+                <div class="field-grid" style="margin-top:12px">
+                  <label>Port<input id="currentIcecastPort" type="number" min="1" max="65535" required></label>
+                  <label>Output gain (dB)<input id="currentOutputGain" type="number" min="-30" max="12" step="0.5" value="0"></label>
+                  <label class="switch-row"><span><b>TLS encryption</b><small>Usually enabled for port 443</small></span><input id="currentIcecastTlsEnabled" type="checkbox"></label>
+                  <label class="switch-row"><span><b>Local monitor</b><small>Also play through a studio device</small></span><input id="currentLocalEnabled" type="checkbox"></label>
+                  <label id="currentDeviceLabel">Monitor device<select id="currentOutputDevice"><option value="">Choose an output device</option></select></label>
+                </div>
+              </details>
+            </section>
+            <section class="stream-wizard-step">
+              <div class="eyebrow">STEP 4 OF 4</div><h3>Review what listeners will hear</h3>
+              <div id="streamWizardSummary" class="inline-status">Choose settings, then run the safety check.</div>
+              <div id="streamWizardChecks" class="stream-wizard-checks" aria-live="polite"></div>
+              <div class="button-row">
+                <button id="testCurrentOutputButton" class="button secondary" type="button">Check my settings</button>
+                <button id="saveCurrentOutputButton" class="button primary" type="submit">Apply safely</button>
+              </div>
+            </section>
           </form>
           <p id="outputConfigResult" class="action-result" aria-live="polite"></p>
           <div class="danger-zone"><button id="deleteStationButton" class="button danger compact" type="button">Delete this station</button></div>
@@ -454,6 +474,29 @@
           <p id="sweeperResult" class="action-result" aria-live="polite"></p>
         </article>
 
+        <article id="guestRoomPanel" class="panel guest-room-panel" data-operator-view="onair">
+          <div class="panel-heading">
+            <div><div class="eyebrow">REMOTE CONTRIBUTION</div><h2>Guest room</h2></div>
+            <div id="guestRoomState" class="mini-state">Safe off-air</div>
+          </div>
+          <p class="card-copy">Invite up to four guests. Everyone enters the lobby off-air; you decide who listeners hear.</p>
+          <div class="button-row">
+            <button id="createGuestInviteButton" class="button primary" type="button">Create one-time guest link</button>
+            <button id="allGuestsOffAirButton" class="button danger" type="button">All guests off air</button>
+          </div>
+          <p id="guestInviteResult" class="action-result" aria-live="polite"></p>
+          <div id="guestRoomParticipants" class="guest-room-participants"><p class="card-copy">Join a studio to manage remote guests.</p></div>
+          <div class="guest-room-safety">
+            <b>Private talkback</b><small>Available only while your host microphone is off-air. Hold the button while speaking.</small>
+            <button id="guestTalkbackButton" class="button secondary" type="button">Hold to talk privately</button>
+          </div>
+          <div class="button-row">
+            <button id="guestRecordButton" class="button secondary" type="button">Request consent and record</button>
+            <button id="guestStopRecordButton" class="button danger" type="button" hidden>Stop recording</button>
+          </div>
+          <p id="guestRecordingResult" class="action-result" aria-live="polite"></p>
+        </article>
+
         <article class="panel activity-panel" data-operator-view="diagnostics">
           <div class="panel-heading"><div><div class="eyebrow">CONFIRMATION</div><h2>Operator activity</h2></div><button id="clearActivityButton" class="button ghost compact" type="button">Clear</button></div>
           <ol id="activityList" class="activity-list"></ol>
@@ -466,5 +509,6 @@
   <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><span class="spinner"></span><b id="busyTitle">Working…</b><small id="busyDetail">Waiting for verified state</small></div></div>
   <div id="toastRegion" class="toast-region" aria-live="assertive"></div>
     <script src="/static/deterministic-wall/app.js?v=24" defer></script>
+    <script src="/static/deterministic-wall/guest-room.js?v=1" defer></script>
 </body>
 </html>

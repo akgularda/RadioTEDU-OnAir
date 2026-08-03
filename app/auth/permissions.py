@@ -13,6 +13,7 @@ _GLOBAL_PERMISSION_GROUPS = {
     "soundboard": {"soundboard.view", "soundboard.play", "soundboard.manage"},
     "program": {"program.panel.open"},
     "shows": {"shows.view", "shows.manage", "show.assign.manage"},
+    "stream": {"stream.configure_basic", "stream.configure_advanced", "stream.failover"},
     "users": {"users.manage", "users.reset_password"},
     "roles": {"roles.manage"},
 }
@@ -34,5 +35,7 @@ SHOW_PERMISSION_KEYS = frozenset(
         "show.jingle_manage",
         "show.break_control",
         "show.end",
+        "show.guest_manage",
+        "show.guest_record",
     }
 )

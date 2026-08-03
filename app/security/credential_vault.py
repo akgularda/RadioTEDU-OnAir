@@ -262,3 +262,12 @@ def resolve_station_icecast_password(station_id: int, stored_value: str) -> str:
     # Legacy plaintext remains readable only long enough for a
     # non-destructive migration on the next successful save/startup.
     return resolve_credential_value(value)
+
+
+def protect_data(data: bytes) -> bytes:
+    """Protect arbitrary local recovery data with the configured OS facility."""
+    return _default_protect(bytes(data))
+
+
+def unprotect_data(data: bytes) -> bytes:
+    return _default_unprotect(bytes(data))

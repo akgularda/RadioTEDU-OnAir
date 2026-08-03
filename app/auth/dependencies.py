@@ -20,6 +20,15 @@ _PUBLIC_API_PATHS = {
     "/api/ai/fast/status",
     "/api/ai/fast/warmup",
     "/api/ai/benchmark",
+    "/api/guest/redeem",
+    "/api/guest/session",
+    "/api/guest/mute",
+    "/api/guest/consent",
+    "/api/ha/internal/heartbeat",
+    "/api/ha/internal/vote",
+    "/api/ha/internal/audit-anchor",
+    "/api/ha/internal/replicate",
+    "/api/ha/internal/checkpoint",
 }
 _ROUTE_ROLE_RULES: list[tuple[str, set[str], set[str]]] = [
     ("/api/auth/", set(_ALL_ROLES), set(_ALL_ROLES)),
@@ -41,6 +50,7 @@ _ROUTE_ROLE_RULES: list[tuple[str, set[str], set[str]]] = [
     ("/api/scanner/", {"admin", "dj", "producer"}, {"admin", "dj", "producer"}),
     ("/api/playlists/", set(_ALL_ROLES), {"admin", "dj", "producer"}),
     ("/api/studios", set(_ALL_ROLES), {"admin", "dj", "producer"}),
+    ("/api/guest-recordings", {"admin", "dj", "producer"}, {"admin", "dj", "producer"}),
     ("/api/stations/", {"admin", "dj", "viewer"}, {"admin", "dj"}),
     ("/api/speaker/", {"admin", "dj", "viewer"}, {"admin", "dj"}),
     ("/api/settings/", {"admin"}, {"admin"}),
@@ -289,6 +299,15 @@ def user_is_allowed_for_request(user: dict, path: str, method: str) -> bool:
     normalized_method = str(method or "GET").upper()
     permissions = _normalized_effective_permissions(user)
     user_role = str(user.get("role") or "")
+
+    if _path_matches("/api/stream-config/", normalized_path):
+        if _normalize_legacy_role(user_role) == "admin":
+            return True
+        if normalized_method in READ_ONLY_METHODS:
+            return bool(permissions & {"stream.configure_basic", "stream.configure_advanced"})
+        if normalized_path.endswith("/rollback"):
+            return "stream.configure_advanced" in permissions
+        return "stream.configure_basic" in permissions
 
     if _path_matches("/api/liquidsoap/", normalized_path):
         if _normalize_legacy_role(user_role) == "admin":

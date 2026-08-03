@@ -18,6 +18,8 @@ from app.api.auth import router as auth_router
 from app.api.audio import router as audio_router
 from app.api.health import router as health_router
 from app.api.health_wall import router as health_wall_router
+from app.api.guest_room import router as guest_room_router
+from app.api.ha import router as ha_router
 from app.api.integrations import router as integrations_router
 from app.api.legacy import router as legacy_router
 from app.api.library_automation import router as library_automation_router
@@ -28,6 +30,7 @@ from app.api.roles import router as roles_router
 from app.api.runtime import router as runtime_router
 from app.api.schedule import router as schedule_router
 from app.api.streaming import router as streaming_router
+from app.api.stream_config import router as stream_config_router
 from app.api.shows import router as shows_router
 from app.api.soundboard import router as soundboard_router
 from app.api.setup import router as setup_router
@@ -42,6 +45,7 @@ from app.auth.dependencies import (
     user_is_allowed_for_request,
 )
 from app.audio.live_mic_registry import live_mic_registry
+from app.audio.guest_audio_registry import guest_audio_registry
 from app.config import (
     get_cors_origins,
     get_public_base_url,
@@ -54,10 +58,15 @@ from app.engine.continuity import resolve_station_fallback_uri
 from app.engine.playout_state import reconcile_all_startup
 from app.middleware.rate_limit import SlidingWindowRateLimiter
 from app.repositories.log_repo import LogRepository
+from app.services.audit_chain import audit_chain
 from app.repositories.settings_repo import SettingsRepository
 from app.repositories.station_repo import StationRepository
 from app.ws.broadcaster import broadcaster, connection_manager
 from app.ws.router import router as ws_router
+from app.ws.guest_router import router as guest_ws_router
+from app.services.ha_coordinator import ha_coordinator
+from app.services.recovery_points import recovery_point_service
+from app.services.playout_checkpoint import playout_checkpoint_service
 
 logger = logging.getLogger("cleanroom.startup")
 _INVALID_STATION_QUERY_VALUES = {"", "undefined", "null", "none", "nan"}
@@ -170,6 +179,7 @@ def _sanitize_request_id(raw: str) -> str:
 async def lifespan(_app: FastAPI):
     connection_manager.reset()
     live_mic_registry.reset()
+    guest_audio_registry.reset()
     live_mic_registry.register_listener(_broadcast_live_mic_status_event)
     shutdown_runtime_registry = None
     shutdown_worker_loop_manager = None
@@ -184,6 +194,10 @@ async def lifespan(_app: FastAPI):
     if failures:
         logger.warning("Dependency bootstrap failures: %s", failures)
     init_db()
+    recovery_point_service.start()
+    playout_checkpoint_service.start()
+    from app.services.program_recording import program_recording_service
+    program_recording_service.start_maintenance()
     if not _env_truthy("CLEANROOM_DISABLE_LIBRARY_WATCHER"):
         from app.services.managed_library_watcher import get_managed_library_watcher
 
@@ -222,6 +236,24 @@ async def lifespan(_app: FastAPI):
 
         shutdown_runtime_registry = runtime_registry
         shutdown_worker_loop_manager = worker_loop_manager
+
+        def on_ha_role(role: str, _snapshot: dict) -> None:
+            if role != "leader":
+                from app.services.program_recording import program_recording_service
+                program_recording_service.stop_all("leadership_lost")
+                worker_loop_manager.stop_all()
+                runtime_registry.stop_all()
+                return
+            leader_conn = get_connection()
+            try:
+                _autostart_station_worker_loops(leader_conn)
+            finally:
+                leader_conn.close()
+            from app.services.program_recording import program_recording_service
+            program_recording_service.resume_replicated_recordings()
+
+        ha_coordinator.register_role_callback(on_ha_role)
+        ha_coordinator.start()
 
         skip_startup_ai = _env_truthy("CLEANROOM_SKIP_STARTUP_AI")
         # Warm the live AI pipeline before worker loops begin so the first
@@ -315,6 +347,8 @@ async def lifespan(_app: FastAPI):
 
         if _env_truthy("CLEANROOM_SKIP_WORKER_AUTOSTART"):
             logger.info("Station worker loop autostart skipped by CLEANROOM_SKIP_WORKER_AUTOSTART")
+        elif ha_coordinator.snapshot()["enabled"]:
+            logger.info("Station worker loop autostart is waiting for a fenced HA leadership lease")
         else:
             _autostart_station_worker_loops(conn)
     finally:
@@ -328,6 +362,14 @@ async def lifespan(_app: FastAPI):
     finally:
         connection_manager.reset()
         live_mic_registry.reset()
+        guest_audio_registry.reset()
+        from app.services.program_recording import program_recording_service
+        program_recording_service.stop_all("service_shutdown")
+        program_recording_service.stop_maintenance()
+        ha_coordinator.stop()
+        ha_coordinator.unregister_role_callback(on_ha_role)
+        recovery_point_service.stop()
+        playout_checkpoint_service.stop()
         if shutdown_library_watcher is not None:
             shutdown_library_watcher.stop()
         if shutdown_product_catalog is not None:
@@ -366,6 +408,7 @@ app.add_middleware(
 )
 app.include_router(health_router)
 app.include_router(health_wall_router)
+app.include_router(ha_router)
 app.include_router(integrations_router)
 app.include_router(auth_router)
 app.include_router(users_router)
@@ -374,6 +417,7 @@ app.include_router(legacy_router)
 app.include_router(library_automation_router)
 app.include_router(stations_router)
 app.include_router(studios_router)
+app.include_router(guest_room_router)
 app.include_router(queue_router)
 app.include_router(runtime_router)
 app.include_router(audio_router)
@@ -382,6 +426,7 @@ app.include_router(public_router)
 app.include_router(ads_router)
 app.include_router(schedule_router)
 app.include_router(streaming_router)
+app.include_router(stream_config_router)
 app.include_router(tracks_router)
 app.include_router(shows_router)
 app.include_router(soundboard_router)
@@ -391,6 +436,7 @@ app.include_router(ai_host_router)
 app.include_router(ai_host_fast_router)
 app.include_router(ai_diagnostics_router)
 app.include_router(ws_router)
+app.include_router(guest_ws_router)
 
 # Some legacy routes are registered late while the compatibility module is
 # imported. Keep the application router synchronized so every legacy endpoint
@@ -621,6 +667,20 @@ async def operation_log_middleware(request: Request, call_next):
                         "request_id": str(getattr(request.state, "request_id", "") or ""),
                     },
                 )
+                user = getattr(request.state, "current_user", None)
+                actor_id = int(user.get("id")) if isinstance(user, dict) and user.get("id") else None
+                audit_chain.append(
+                    category="security",
+                    action="api.mutation",
+                    station_id=station_id,
+                    actor_id=actor_id,
+                    payload={
+                        "method": method,
+                        "path": path,
+                        "status_code": int(response.status_code),
+                        "request_id": str(getattr(request.state, "request_id", "") or ""),
+                    },
+                )
             except Exception:
                 # Logging must never break the request path.
                 pass
@@ -667,3 +727,8 @@ def frontend_app():
 @app.get("/login.html", include_in_schema=False)
 def frontend_login():
     return FileResponse(_STATIC_DIR / "login.html")
+
+
+@app.get("/guest.html", include_in_schema=False)
+def frontend_guest():
+    return FileResponse(_STATIC_DIR / "guest.html")

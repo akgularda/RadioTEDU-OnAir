@@ -403,11 +403,23 @@ if (-not (Remove-PathWithRetry -Path $distDir)) {
 $pyInstallerDistRoot = ".\build\backend-publish"
 $pyInstallerWorkRoot = ".\build\pyinstaller-work"
 
-# Stop any running packaged backend process to avoid file-lock failures during clean build.
+# Stop only disposable build-output processes. Never terminate an installed or
+# commissioned backend merely because a developer started a packaging build.
+$allowedProcessRoots = @(
+    [System.IO.Path]::GetFullPath((Join-Path $root "build")),
+    [System.IO.Path]::GetFullPath((Join-Path $root "dist"))
+)
 $running = @(
     Get-Process -Name $BackendExeName -ErrorAction SilentlyContinue
     Get-Process -Name $LegacyBackendExeName -ErrorAction SilentlyContinue
-)
+) | Where-Object {
+    $processPath = $_.Path
+    if (-not $processPath) { return $false }
+    $resolvedProcessPath = [System.IO.Path]::GetFullPath($processPath)
+    return [bool]($allowedProcessRoots | Where-Object {
+        $resolvedProcessPath.StartsWith($_ + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+}
 if ($running) {
     $running | ForEach-Object {
         Write-Output "Stopping running process PID=$($_.Id) ($($_.Path))"

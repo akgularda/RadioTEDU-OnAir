@@ -793,7 +793,23 @@ function renderOutputConfiguration() {
   }
   const targets = [output.icecast_enabled ? output.icecast_mount || 'Icecast' : '', output.local_output_enabled ? 'local monitor' : ''].filter(Boolean);
   $('outputConfigState').textContent = targets.length ? targets.join(' + ') : 'No output configured';
+  const user = currentUser();
+  const permissions = new Set(user.effective_permissions || []);
+  const canUseAdvanced = ['admin', 'superadmin'].includes(String(user.role || '')) || permissions.has('stream.configure_advanced');
+  $('streamAdvancedSettings').hidden = !canUseAdvanced;
+  const destinationSelect = $('streamWizardDestination');
+  if (destinationSelect) {
+    const newOption = [...destinationSelect.options].find((option) => option.value === 'new');
+    if (newOption) newOption.disabled = !canUseAdvanced;
+    if (!canUseAdvanced) destinationSelect.value = 'saved';
+  }
+  ['currentIcecastHost', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword'].forEach((id) => {
+    if ($(id)) $(id).readOnly = !canUseAdvanced;
+  });
+  if ($('currentIcecastEnabled')) $('currentIcecastEnabled').disabled = !canUseAdvanced;
+  if ($('streamDestinationProtection')) $('streamDestinationProtection').hidden = canUseAdvanced;
   toggleCurrentOutputFields();
+  renderStreamWizardSummary();
 }
 
 function renderAiConfiguration() {
@@ -1759,7 +1775,7 @@ function clearFormDirty(ids) {
   ids.forEach((id) => { const node = $(id); if (node) delete node.dataset.dirty; });
 }
 
-async function saveCurrentOutput(event) {
+async function saveCurrentOutputLegacy(event) {
   event.preventDefault();
   setResult('outputConfigResult');
   let payload;
@@ -1827,7 +1843,7 @@ async function saveCurrentOutput(event) {
   }
 }
 
-async function testCurrentOutput() {
+async function testCurrentOutputLegacy() {
   setBusy(true, 'Testing stream destination…', 'Checking configuration, network reachability, and saved verification');
   setResult('outputConfigResult');
   try {
@@ -1845,6 +1861,73 @@ async function testCurrentOutput() {
     logActivity('Verified the current station stream destination'); toast('Stream destination verified');
   } catch (error) {
     const message = errorMessage(error); setResult('outputConfigResult', message, 'error'); logActivity(`Stream test failed: ${message}`, 'error'); toast(message, 'error');
+  } finally { setBusy(false); }
+}
+
+function renderStreamWizardSummary() {
+  const node = $('streamWizardSummary');
+  if (!node || !$('currentIcecastHost')) return;
+  const profile = $('currentIcecastProfile').value === 'mp3_128' ? 'Most compatible MP3' : 'Higher quality AAC+';
+  const destination = `${$('currentIcecastTlsEnabled').checked ? 'Secure ' : ''}${$('currentIcecastHost').value || 'destination'}:${$('currentIcecastPort').value || '—'}${$('currentIcecastMount').value || ''}`;
+  node.innerHTML = `<b>Listener result:</b> ${escapeHtml(profile)} will be sent to ${escapeHtml(destination)}. The current stream remains unchanged until Apply safely completes.`;
+}
+
+function renderStreamValidation(report) {
+  const node = $('streamWizardChecks');
+  if (!node) return;
+  const labels = {
+    locally_valid: 'Settings complete', destination_reachable: 'Destination reachable', credentials_verified: 'Protected password',
+    standby_ready: 'Standby and quorum', rollback_ready: 'Rollback ready', live_output_verified: 'Live listener output', required_media: 'Queued media available',
+  };
+  node.innerHTML = Object.entries(report?.checks || {}).map(([key, check]) =>
+    `<div class="stream-check ${escapeHtml(check.status || '')}"><b>${escapeHtml(labels[key] || key)} — ${escapeHtml(check.status || 'pending')}</b><br><small>${escapeHtml(check.message || '')}</small></div>`).join('');
+}
+
+async function createAndValidateStreamDraft() {
+  const payload = currentOutputPayload();
+  const draft = await api('/api/stream-config/drafts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), idempotent: true,
+  });
+  const report = await api(`/api/stream-config/drafts/${draft.id}/validate`, { method: 'POST', idempotent: true, timeoutMs: 10000 });
+  renderStreamValidation(report);
+  return { draft, report };
+}
+
+async function saveCurrentOutput(event) {
+  event.preventDefault();
+  setResult('outputConfigResult');
+  const stationName = $('currentStationName').value.trim();
+  if (!stationName) return;
+  setBusy(true, 'Applying stream safely…', 'Validating, preserving rollback state, applying once, and reading authoritative state back');
+  try {
+    const { draft, report } = await createAndValidateStreamDraft();
+    if (report.outcome !== 'ready') throw new Error(report.outcome === 'unsafe' ? 'Unsafe to apply. Correct the highlighted checks.' : 'Needs attention. The destination must be reachable before safe application.');
+    await api(`/api/stations/${state.stationId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: stationName }), idempotent: true });
+    const operation = await api(`/api/stream-config/drafts/${draft.id}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` },
+      body: JSON.stringify({}), idempotent: true, timeoutMs: 75000,
+    });
+    if (!['applied', 'verifying'].includes(operation.status)) throw new Error(operation.result?.message || 'The new output was not applied; the previous configuration remains active.');
+    clearFormDirty(['currentStationName', 'currentOutputGain', 'currentIcecastEnabled', 'currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastUser', 'currentIcecastPassword', 'currentIcecastProfile', 'currentIcecastTlsEnabled', 'currentLocalEnabled', 'currentOutputDevice']);
+    await loadStations(state.stationId); await loadOperatorConfiguration(); renderOutputConfiguration();
+    const message = operation.status === 'verifying' ? 'Applied safely. OnAir is observing the live output for 60 seconds and will roll back automatically if it degrades.' : 'Verified: the stream configuration was applied once, read back, and rollback state was retained.';
+    setResult('outputConfigResult', message, 'success'); logActivity(message); toast('Station output verified');
+  } catch (error) {
+    const message = errorMessage(error); setResult('outputConfigResult', message, 'error'); logActivity(`Safe stream application stopped: ${message}`, 'error'); toast(message, 'error');
+  } finally { setBusy(false); await loadCoreStatus().catch(() => {}); }
+}
+
+async function testCurrentOutput() {
+  setBusy(true, 'Checking stream safely…', 'No live setting will change during this check');
+  setResult('outputConfigResult');
+  try {
+    const { report } = await createAndValidateStreamDraft();
+    const messages = { ready: 'Ready: every required pre-apply check passed. You can use Apply safely.', needs_attention: 'Needs attention: correct the highlighted item. Your current stream was not changed.', unsafe: 'Unsafe to apply: redundancy or credential protection is not ready. Your current stream was not changed.' };
+    setResult('outputConfigResult', messages[report.outcome] || 'Check complete.', report.outcome === 'ready' ? 'success' : 'error');
+    logActivity(`Stream safety check: ${report.outcome}`); toast(`Stream check: ${report.outcome}`);
+  } catch (error) {
+    const message = errorMessage(error); setResult('outputConfigResult', message, 'error'); logActivity(`Stream check failed: ${message}`, 'error'); toast(message, 'error');
   } finally { setBusy(false); }
 }
 
@@ -2763,6 +2846,10 @@ function bindEvents() {
   $('deleteStationButton').addEventListener('click', deleteCurrentStation);
   $('currentIcecastEnabled').addEventListener('change', toggleCurrentOutputFields);
   $('currentLocalEnabled').addEventListener('change', toggleCurrentOutputFields);
+  ['currentIcecastHost', 'currentIcecastPort', 'currentIcecastMount', 'currentIcecastProfile', 'currentIcecastTlsEnabled'].forEach((id) => {
+    $(id)?.addEventListener('input', renderStreamWizardSummary);
+    $(id)?.addEventListener('change', renderStreamWizardSummary);
+  });
   $('aiConfigForm').addEventListener('submit', saveAiConfiguration);
   $('testAiButton').addEventListener('click', runAiTest);
   $('integrationForm').addEventListener('submit', saveIntegrations);
