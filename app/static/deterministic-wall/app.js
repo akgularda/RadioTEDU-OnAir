@@ -77,6 +77,91 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const asBool = (value) => value === true || ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
 
+let desktopPickerSequence = 0;
+let desktopPickerInitialized = false;
+const desktopPickerPending = new Map();
+
+function desktopPickerWebView() {
+  const webview = window.chrome?.webview;
+  return webview
+    && typeof webview.postMessage === 'function'
+    && typeof webview.addEventListener === 'function'
+    ? webview
+    : null;
+}
+
+function handleDesktopPickerMessage(event) {
+  let message = event?.data;
+  if (typeof message === 'string') {
+    try { message = JSON.parse(message); } catch (_) { return; }
+  }
+  if (message?.type !== 'radiotedu-picker-response') return;
+  const pending = desktopPickerPending.get(String(message.requestId || ''));
+  if (!pending) return;
+  desktopPickerPending.delete(String(message.requestId));
+  window.clearTimeout(pending.timer);
+  if (message.error) {
+    pending.reject(new Error(String(message.error)));
+    return;
+  }
+  const selectedPath = String(message.path || '');
+  pending.resolve({
+    ok: true,
+    selected: Boolean(message.selected && selectedPath),
+    path: selectedPath,
+    folder: selectedPath,
+  });
+}
+
+function initializeDesktopPickerBridge() {
+  const webview = desktopPickerWebView();
+  if (!webview) return false;
+  if (!desktopPickerInitialized) {
+    webview.addEventListener('message', handleDesktopPickerMessage);
+    desktopPickerInitialized = true;
+  }
+  return true;
+}
+
+function requestDesktopPicker(kind, initialPath, description) {
+  const webview = desktopPickerWebView();
+  if (!webview || !initializeDesktopPickerBridge()) {
+    return Promise.reject(new Error('RadioTEDU desktop picker bridge is unavailable'));
+  }
+  const requestId = `picker-${Date.now()}-${++desktopPickerSequence}`;
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      desktopPickerPending.delete(requestId);
+      reject(new Error('The desktop folder window timed out. Enter the absolute path instead.'));
+    }, 620000);
+    desktopPickerPending.set(requestId, { resolve, reject, timer });
+    webview.postMessage({
+      type: 'radiotedu-picker-request',
+      requestId,
+      kind,
+      initialPath: String(initialPath || ''),
+      description: String(description || ''),
+    });
+  });
+}
+
+async function pickOperatorPath(kind, initialPath, description) {
+  if (initializeDesktopPickerBridge()) {
+    return requestDesktopPicker(kind, initialPath, description);
+  }
+  const endpoint = kind === 'file'
+    ? '/api/operator/pick-file'
+    : '/api/operator/pick-folder';
+  return api(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(kind === 'file'
+      ? { initial_path: String(initialPath || ''), description }
+      : { initial_folder: String(initialPath || ''), description }),
+    timeoutMs: 620000,
+  });
+}
+
 function activateOperatorView(requestedView, { persist = true, focus = false } = {}) {
   const view = OPERATOR_VIEWS[requestedView] ? requestedView : 'onair';
   state.activeView = view;
@@ -661,22 +746,18 @@ async function pickRadioTEDUServicePath(button) {
   const serviceId = button.dataset.serviceId;
   const field = button.dataset.servicePath;
   const kind = button.dataset.pickerKind === 'file' ? 'file' : 'folder';
-  const endpoint = kind === 'file'
-    ? '/api/operator/pick-file'
-    : '/api/operator/pick-folder';
   const input = $(serviceControlId(serviceId, field));
   if (!serviceId || !field || !input) return;
   setBusy(true, `Selecting ${field.replaceAll('_', ' ')}…`, 'Use the operating-system picker');
   setResult('serviceControlResult');
   try {
-    const result = await api(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(kind === 'file'
-        ? { initial_path: input.value.trim(), description: `Select ${serviceId} protected configuration` }
-        : { initial_folder: input.value.trim(), description: `Select ${serviceId} ${field.replaceAll('_', ' ')}` }),
-      timeoutMs: 620000,
-    });
+    const result = await pickOperatorPath(
+      kind,
+      input.value.trim(),
+      kind === 'file'
+        ? `Select ${serviceId} protected configuration`
+        : `Select ${serviceId} ${field.replaceAll('_', ' ')}`,
+    );
     const selected = kind === 'file' ? result.path : result.folder;
     if (result.selected && selected) {
       input.value = selected;
@@ -1215,11 +1296,7 @@ async function pickManagedFolder(inputId, description) {
   const input = $(inputId);
   setBusy(true, 'Choose a folder…', 'Use the native folder window, then return here');
   try {
-    const result = await api('/api/operator/pick-folder', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initial_folder: input.value.trim(), description }),
-      timeoutMs: 610000,
-    });
+    const result = await pickOperatorPath('folder', input.value.trim(), description);
     if (result?.selected && result.folder) {
       input.value = result.folder;
       input.dataset.dirty = '1';

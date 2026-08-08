@@ -122,6 +122,8 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "pull_model" in javascript
     assert "update_repository" in javascript
     assert "/api/operator/pick-file" in javascript
+    assert "radiotedu-picker-request" in javascript
+    assert "async function pickOperatorPath" in javascript
     assert "data-service-path=" in javascript
     assert "database.last_update_at" in javascript
     assert "if (!state.stationId || (state.busy && !silent)) return;" in javascript

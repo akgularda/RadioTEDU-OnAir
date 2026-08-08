@@ -189,6 +189,96 @@ test('RadioTEDU OnAir wall is visibly branded and supports arbitrary station mou
   assert.match(script, /broadcast_autostart_enabled/);
 });
 
+test('desktop folder picker uses the interactive shell bridge instead of the service API', async () => {
+  const posted = [];
+  let messageHandler = null;
+  const requests = [];
+  const context = {
+    Map,
+    Date,
+    Promise,
+    Error,
+    JSON,
+    String,
+    Boolean,
+    window: {
+      chrome: {
+        webview: {
+          addEventListener(type, handler) {
+            assert.equal(type, 'message');
+            messageHandler = handler;
+          },
+          postMessage(message) { posted.push(message); },
+        },
+      },
+      setTimeout() { return 77; },
+      clearTimeout() {},
+    },
+    api: async (...args) => { requests.push(args); return {}; },
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${scriptSection('let desktopPickerSequence', 'function activateOperatorView(')}\n`
+      + 'globalThis.__pickOperatorPath = pickOperatorPath;',
+    context,
+  );
+
+  const resultPromise = context.__pickOperatorPath(
+    'folder',
+    'D:\\Radio\\Music',
+    'Select station music',
+  );
+  assert.equal(posted.length, 1);
+  assert.equal(requests.length, 0);
+  assert.equal(posted[0].type, 'radiotedu-picker-request');
+  assert.equal(posted[0].kind, 'folder');
+  assert.equal(posted[0].initialPath, 'D:\\Radio\\Music');
+  assert.equal(typeof messageHandler, 'function');
+
+  messageHandler({
+    data: {
+      type: 'radiotedu-picker-response',
+      requestId: posted[0].requestId,
+      selected: true,
+      path: 'E:\\RadioTEDU\\LoFi',
+    },
+  });
+  const result = await resultPromise;
+  assert.equal(result.selected, true);
+  assert.equal(result.folder, 'E:\\RadioTEDU\\LoFi');
+  assert.equal(requests.length, 0);
+});
+
+test('ordinary browser folder picker retains the authenticated API fallback', async () => {
+  const requests = [];
+  const context = {
+    Map,
+    Date,
+    Promise,
+    Error,
+    JSON,
+    String,
+    Boolean,
+    window: { setTimeout() { return 1; }, clearTimeout() {} },
+    api: async (...args) => {
+      requests.push(args);
+      return { ok: true, selected: false, folder: '' };
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${scriptSection('let desktopPickerSequence', 'function activateOperatorView(')}\n`
+      + 'globalThis.__pickOperatorPath = pickOperatorPath;',
+    context,
+  );
+
+  await context.__pickOperatorPath('folder', 'D:\\Radio', 'Select music');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], '/api/operator/pick-folder');
+  assert.equal(JSON.parse(requests[0][1].body).initial_folder, 'D:\\Radio');
+});
+
 test('multi-station, genre, queue, jingle, emergency, and optional AI controls are available', () => {
   assert.match(html, /class="station-control"/);
   assert.match(html, /class="status-card ai-card"/);

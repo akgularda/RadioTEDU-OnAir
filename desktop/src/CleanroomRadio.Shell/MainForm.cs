@@ -137,8 +137,92 @@ public sealed class MainForm : Form
         _webView.CoreWebView2.NavigationStarting += HandleNavigationStarting;
         _webView.CoreWebView2.NavigationCompleted += HandleNavigationCompleted;
         _webView.CoreWebView2.NewWindowRequested += (_, eventArgs) => eventArgs.Handled = true;
+        if (_launchMode == ShellLaunchMode.Operator)
+        {
+            _webView.CoreWebView2.WebMessageReceived += HandleWebMessageReceived;
+        }
         _webView.Source = _panelUri;
         _webViewInitialized = true;
+    }
+
+    private void HandleWebMessageReceived(
+        object? sender,
+        CoreWebView2WebMessageReceivedEventArgs eventArgs)
+    {
+        if (_launchMode != ShellLaunchMode.Operator
+            || _webView.CoreWebView2 is null
+            || !NativePickerBridge.IsTrustedSource(_panelUri, eventArgs.Source)
+            || !NativePickerBridge.TryParseRequest(eventArgs.WebMessageAsJson, out var request)
+            || request is null)
+        {
+            return;
+        }
+
+        NativePickerResponse response;
+        try
+        {
+            response = ShowNativePicker(request);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "RadioTEDU native picker failed: {0}",
+                ex.Message);
+            response = new NativePickerResponse(
+                request.RequestId,
+                false,
+                string.Empty,
+                "The desktop folder window could not be opened. Enter the absolute path instead.");
+        }
+
+        _webView.CoreWebView2.PostWebMessageAsJson(
+            NativePickerBridge.CreateResponseJson(response));
+    }
+
+    private NativePickerResponse ShowNativePicker(NativePickerRequest request)
+    {
+        if (request.Kind == "folder")
+        {
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = request.Description,
+                ShowNewFolderButton = true,
+                UseDescriptionForTitle = true,
+                SelectedPath = Directory.Exists(request.InitialPath)
+                    ? request.InitialPath
+                    : string.Empty,
+            };
+            var selected = dialog.ShowDialog(this) == DialogResult.OK
+                && !string.IsNullOrWhiteSpace(dialog.SelectedPath);
+            return new NativePickerResponse(
+                request.RequestId,
+                selected,
+                selected ? dialog.SelectedPath : string.Empty);
+        }
+
+        using var fileDialog = new OpenFileDialog
+        {
+            Title = request.Description,
+            Filter = "Environment files (*.env)|*.env|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (File.Exists(request.InitialPath))
+        {
+            fileDialog.InitialDirectory = Path.GetDirectoryName(request.InitialPath) ?? string.Empty;
+            fileDialog.FileName = Path.GetFileName(request.InitialPath);
+        }
+        else if (Directory.Exists(request.InitialPath))
+        {
+            fileDialog.InitialDirectory = request.InitialPath;
+        }
+
+        var fileSelected = fileDialog.ShowDialog(this) == DialogResult.OK
+            && !string.IsNullOrWhiteSpace(fileDialog.FileName);
+        return new NativePickerResponse(
+            request.RequestId,
+            fileSelected,
+            fileSelected ? fileDialog.FileName : string.Empty);
     }
 
     private async Task InitializeOrRecoverHealthWallAsync()

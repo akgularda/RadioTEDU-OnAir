@@ -3729,9 +3729,42 @@ def _canonical_library_path(value: str | Path) -> str:
     return str(resolved).replace("/", "\\").casefold()
 
 
+def _windows_process_session_id() -> int | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        session_id = ctypes.c_uint(0)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.ProcessIdToSessionId(
+            os.getpid(), ctypes.byref(session_id)
+        ):
+            return None
+        return int(session_id.value)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _native_picker_requires_desktop_bridge() -> bool:
+    return os.name == "nt" and _windows_process_session_id() == 0
+
+
+def _reject_noninteractive_native_picker() -> None:
+    if _native_picker_requires_desktop_bridge():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The broadcast service cannot open windows on the operator desktop. "
+                "Use the RadioTEDU OnAir desktop app or enter an absolute path."
+            ),
+        )
+
+
 @router.post("/api/operator/pick-folder")
 def pick_operator_folder(payload: FolderPickerPayload):
     """Open the operating system folder chooser for a local desktop operator."""
+    _reject_noninteractive_native_picker()
     initial = str(payload.initial_folder or "").strip().strip('"')
     description = str(payload.description or "Select a radio media folder").strip()
     if os.name == "nt":
@@ -3792,6 +3825,7 @@ def pick_operator_folder(payload: FolderPickerPayload):
 @router.post("/api/operator/pick-file")
 def pick_operator_file(payload: FilePickerPayload):
     """Open the operating system file chooser for a local desktop operator."""
+    _reject_noninteractive_native_picker()
     initial = str(payload.initial_path or "").strip().strip('"')
     description = str(
         payload.description or "Select a protected configuration file"
