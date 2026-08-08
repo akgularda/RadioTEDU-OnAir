@@ -2,14 +2,17 @@
 
 ## Current boundary
 
-OnAir now requires listener-delivered audio bytes before it reports a station as live. The local scheduler, engine, queue, credential handoff, and output processes have been repaired and tested, but the public endpoint still returns HTTP 404 with no payload:
+OnAir requires listener-delivered audio bytes before it reports a station as live. The local scheduler, engine, queue, credential handoff, and output processes have been repaired and tested. Investigation on 2026-08-08 identified TinyIce v2 on the private service port and a broken Nginx streaming path:
 
-- source target: `stream.radiotedu.com:443/lofi` over TLS
-- public listener: `https://stream.radiotedu.com/lofi`
-- direct internal candidate `10.98.98.75:11154`: resets both modern `PUT` and legacy `SOURCE`
-- local public status: station 2 is `degraded`
+- broken proxy path: `stream.radiotedu.com:443/lofi` over TLS; Nginx registers the source intermittently but returns 404 or zero listener bytes
+- verified direct TinyIce path: `http://stream.radiotedu.com:11154/lofi`
+- TinyIce control/player UI: `http://stream.radiotedu.com:11154/` and `/player/lofi`
+- working OnAir output: host `stream.radiotedu.com`, port `11154`, mount `/lofi`, TLS disabled
+- working public base: `http://stream.radiotedu.com:11154`
 
-Do not weaken OnAir's listener verification to hide this condition. Repair the server path.
+The direct path returned HTTP 200 `audio/aac` and non-empty listener samples. TinyIce can retain a stale source after rapid reconnects, so stop all sources and wait for two successful TinyIce root responses before reconnecting. Backend `r6` also monitors a flowing encoder in place instead of destroying it after isolated listener-probe misses.
+
+Do not weaken OnAir's listener verification to hide this condition. The direct private path is the operational workaround; repair Nginx before moving the source or public base back to HTTPS port 443.
 
 ## Server-side audit order
 

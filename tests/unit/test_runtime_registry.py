@@ -48,6 +48,26 @@ class _RecoveringRuntime(_FakeRuntime):
         return {"running": True, "branch_health": self.branch_health()}
 
 
+class _FlowingUnverifiedRuntime(_RecoveringRuntime):
+    def status(self):
+        return {
+            "running": False,
+            "program_running": True,
+            "program_pcm_age_seconds": 0.02,
+            "program_pcm_stalled": False,
+            "output_feed_active": False,
+            "branch_health": self.branch_health(),
+            "icecast_mount_health": {
+                "process_running": True,
+                "mount_healthy": False,
+                "writer_running": True,
+                "writer_failed": False,
+                "writer_backpressured": False,
+                "last_write_age_seconds": 0.01,
+            },
+        }
+
+
 def test_registry_serializes_operations_for_the_same_station():
     reg = StationRuntimeRegistry(runtime_factory=lambda: _FakeRuntime())
     entered = threading.Event()
@@ -229,6 +249,38 @@ def test_registry_recovery_uses_bounded_retry_wait(tmp_path, monkeypatch):
     assert first["recovery"]["error_code"] == "origin_unreachable"
     assert 0 < first["recovery"]["retry_in_seconds"] <= 1.0
     assert second["recovery"]["attempt_count"] == 1
+
+
+def test_registry_does_not_restart_flowing_source_for_probe_miss(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    monkeypatch.setenv("CLEANROOM_DISABLE_ICECAST_METADATA", "1")
+    init_db()
+    conn = get_connection()
+    StationOutputRepository(conn).upsert(
+        station_id=1,
+        local_output_enabled=False,
+        output_device_id="",
+        icecast_enabled=True,
+        icecast_host="127.0.0.1",
+        icecast_port=11154,
+        icecast_mount="/station1",
+        icecast_user="source",
+        icecast_password="test-password",
+    )
+    conn.close()
+
+    fake = _FlowingUnverifiedRuntime()
+    reg = StationRuntimeRegistry(runtime_factory=lambda: fake)
+    reg.start_station(1, input_uri="C:/music/fallback.mp3")
+
+    status = reg.recover_station(1)
+
+    assert fake.recover_calls == 0
+    assert status["recovery"]["state"] == "monitoring"
+    assert status["recovery"]["error_code"] == "output_unverified"
+    assert status["recovery"]["retry_in_seconds"] > 0
 
 
 def test_registry_start_creates_default_output_settings_when_missing(tmp_path, monkeypatch):

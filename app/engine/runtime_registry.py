@@ -26,6 +26,7 @@ _ICECAST_METADATA_RETRY_DELAYS_SECONDS = (0.0, 0.3, 0.6, 1.2, 2.5)
 _ICECAST_METADATA_REFRESH_SECONDS = 20.0
 _ICECAST_METADATA_BACKOFF_MAX_SECONDS = 300.0
 _OUTPUT_RECOVERY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+_OUTPUT_MONITOR_RECHECK_SECONDS = 15.0
 _DEFAULT_LIVE_AUDIO_SETTINGS = {
     "program_music_mode": "normal",
     "mic_gain": 1.0,
@@ -1314,6 +1315,29 @@ class StationRuntimeRegistry:
                 previous.get("next_attempt_monotonic") or 0.0
             ):
                 return self.status(sid)
+        if not force and self._unverified_icecast_transport_is_flowing(
+            sid, runtime
+        ):
+            # A listener probe can briefly miss while TinyIce is publishing a
+            # new AAC source. Destroying a live encoder at that point leaves a
+            # stale server-side source session and turns a probe miss into a
+            # real outage. Keep feeding the established transport and let the
+            # mount probe converge; only dead/blocked writers are rebuilt.
+            with self._recovery_lock:
+                self._recovery_state[sid] = {
+                    "state": "monitoring",
+                    "attempt_count": int(previous.get("attempt_count") or 0),
+                    "next_attempt_monotonic": (
+                        time.monotonic() + _OUTPUT_MONITOR_RECHECK_SECONDS
+                    ),
+                    "error_code": "output_unverified",
+                    "message": (
+                        "The encoder and PCM writer are healthy; waiting for "
+                        "listener verification without restarting the source."
+                    ),
+                }
+            return self.status(sid)
+        with self._recovery_lock:
             attempt_count = int(previous.get("attempt_count") or 0) + 1
             self._recovery_state[sid] = {
                 "state": "recovering",
@@ -1366,6 +1390,44 @@ class StationRuntimeRegistry:
                 "message": "Required broadcast outputs recovered.",
             }
         return self.status(sid)
+
+    def _unverified_icecast_transport_is_flowing(
+        self, station_id: int, runtime
+    ) -> bool:
+        required = self._required_outputs.get(
+            int(station_id), {"icecast": True, "local": False}
+        )
+        required_branches = [
+            str(branch)
+            for branch, enabled in required.items()
+            if bool(enabled)
+        ]
+        if not required_branches or any(
+            not branch.startswith("icecast") for branch in required_branches
+        ):
+            return False
+        try:
+            status = dict(runtime.status())
+        except Exception:
+            return False
+        mount = status.get("icecast_mount_health")
+        if not isinstance(mount, dict):
+            return False
+        try:
+            pcm_age = float(status.get("program_pcm_age_seconds"))
+            write_age = float(mount.get("last_write_age_seconds"))
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            status.get("program_running")
+            and not status.get("program_pcm_stalled", False)
+            and pcm_age <= 2.0
+            and mount.get("process_running")
+            and mount.get("writer_running")
+            and not mount.get("writer_failed", False)
+            and not mount.get("writer_backpressured", False)
+            and write_age <= 2.0
+        )
 
     def is_process_running(self, station_id: int) -> bool:
         """Lightweight check: is the station's audio feed still active?
