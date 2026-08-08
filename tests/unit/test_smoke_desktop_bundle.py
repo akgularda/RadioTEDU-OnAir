@@ -16,6 +16,24 @@ def test_smoke_script_reads_exact_installer_path_marker():
     assert "Installer marker" in script
 
 
+def test_smoke_script_rejects_generic_unbranded_desktop_icons():
+    script = (Path(__file__).resolve().parents[2] / "smoke_test_desktop_bundle.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function Assert-RadioTeduIcon" in script
+    assert "ExtractAssociatedIcon" in script
+    assert "$radioTeduRedPixels -lt 20" in script
+    assert (
+        'Assert-RadioTeduIcon -ExecutablePath $agentPath -Label "Desktop agent artifact"'
+        in script
+    )
+    assert (
+        'Assert-RadioTeduIcon -ExecutablePath $shellPath -Label "Desktop shell artifact"'
+        in script
+    )
+
+
 def test_smoke_script_sets_backend_env_via_process_start_info():
     script = (Path(__file__).resolve().parents[2] / "smoke_test_desktop_bundle.ps1").read_text(
         encoding="utf-8"
@@ -167,13 +185,25 @@ function Invoke-RestMethod {{
     return [pscustomobject]@{{ status = 'ok' }}
 }}
 try {{
-    & '{temp_smoke_script}' -Root '{script_root}'
+    $smokeError = $null
+    try {{
+        & '{temp_smoke_script}' -Root '{script_root}'
+    }}
+    catch {{
+        $smokeError = $_
+    }}
 }}
 finally {{
     $listener.Stop()
 }}
 if ($global:capturedUri -match ":$occupiedPort/") {{
     throw "smoke script targeted the occupied port: $global:capturedUri"
+}}
+if (-not $global:capturedUri) {{
+    throw "smoke script never probed an auto-allocated backend port"
+}}
+if ($smokeError -and $smokeError.Exception.Message -notmatch "embedded RadioTEDU logo") {{
+    throw $smokeError
 }}
 """
 

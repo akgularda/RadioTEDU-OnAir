@@ -43,6 +43,52 @@ function Assert-FileExists {
     }
 }
 
+function Assert-RadioTeduIcon {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    Add-Type -AssemblyName System.Drawing
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ExecutablePath)
+    if (-not $icon) {
+        throw "$Label does not contain an extractable application icon: $ExecutablePath"
+    }
+
+    $bitmap = $null
+    try {
+        $bitmap = $icon.ToBitmap()
+        $radioTeduRedPixels = 0
+        for ($y = 0; $y -lt $bitmap.Height; $y++) {
+            for ($x = 0; $x -lt $bitmap.Width; $x++) {
+                $pixel = $bitmap.GetPixel($x, $y)
+                if (
+                    $pixel.A -gt 100 -and
+                    $pixel.R -gt 170 -and
+                    $pixel.R -gt ($pixel.G * 1.35) -and
+                    $pixel.R -gt ($pixel.B * 1.35)
+                ) {
+                    $radioTeduRedPixels++
+                }
+            }
+        }
+
+        # The 32x32 RadioTEDU mark contains well over 100 red pixels. Keep a
+        # deliberately conservative floor so resampling differences do not
+        # cause false failures, while the generic Windows EXE icon (zero red
+        # pixels) can never pass a release smoke check.
+        if ($radioTeduRedPixels -lt 20) {
+            throw "$Label is missing the embedded RadioTEDU logo: $ExecutablePath"
+        }
+    }
+    finally {
+        if ($bitmap) {
+            $bitmap.Dispose()
+        }
+        $icon.Dispose()
+    }
+}
+
 function Resolve-RecordedInstallerPath {
     param(
         [Parameter(Mandatory = $true)][string]$ProjectRoot,
@@ -370,6 +416,8 @@ else {
 
 Assert-FileExists -Path $InstallerPath -Label "Installer artifact"
 $selectedBackendPort = Invoke-BackendSmoke -BackendPath $backendPath -ProjectRoot $projectRoot -BackendPort $BackendPort -HealthTimeoutSec $HealthTimeoutSec
+Assert-RadioTeduIcon -ExecutablePath $agentPath -Label "Desktop agent artifact"
+Assert-RadioTeduIcon -ExecutablePath $shellPath -Label "Desktop shell artifact"
 
 Write-Host "Desktop bundle smoke check passed."
 Write-Host "Backend artifact: $backendPath"
