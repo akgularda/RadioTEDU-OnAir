@@ -5,6 +5,7 @@ passlib[bcrypt]
 pydantic
 python-multipart
 python-jose[cryptography]
+requests
 pytest
 tzdata
 uvicorn

@@ -120,7 +120,7 @@ public sealed class MainForm : Form
     private static string GetWebViewUserDataFolder(ShellLaunchMode launchMode)
     {
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var profile = launchMode == ShellLaunchMode.HealthWall ? "EBWebView-HealthWall" : "EBWebView";
+        var profile = launchMode == ShellLaunchMode.HealthWall ? "EBWebView-HealthWall" : "EBWebView-OnAir";
         return Path.Combine(localAppData, "RadioTEDU OnAir", profile);
     }
 

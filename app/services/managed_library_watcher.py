@@ -21,6 +21,7 @@ _FOLDER_KEYS = {
     "station_id_library_folder": "station_id",
     "show_library_folder": "show",
 }
+_DEFAULT_RESCAN_INTERVAL_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class ManagedLibraryProfile:
     profile_label: str = ""
     default_genre: str = ""
     default_language: str = ""
+    rescan_interval_seconds: float = 0.0
 
     @property
     def key(self) -> str:
@@ -60,6 +62,13 @@ def _truthy(raw: str, default: bool = False) -> bool:
     if token in {"0", "false", "no", "off"}:
         return False
     return bool(default)
+
+
+def _nonnegative_float(raw: str, default: float = 0.0) -> float:
+    try:
+        return max(0.0, float(str(raw or "").strip()))
+    except (TypeError, ValueError):
+        return max(0.0, float(default))
 
 
 def _default_profile_provider() -> list[ManagedLibraryProfile]:
@@ -106,6 +115,13 @@ def _default_profile_provider() -> list[ManagedLibraryProfile]:
                     default_language=str(
                         settings.get(f"{prefix}_default_language", "") or ""
                     ).strip(),
+                    rescan_interval_seconds=_nonnegative_float(
+                        settings.get(
+                            f"{prefix}_rescan_interval_seconds",
+                            str(_DEFAULT_RESCAN_INTERVAL_SECONDS),
+                        ),
+                        default=_DEFAULT_RESCAN_INTERVAL_SECONDS,
+                    ),
                 )
             )
     return profiles
@@ -221,7 +237,13 @@ class ManagedLibraryWatcher:
                     state.status = "settling"
                     continue
                 state.stable_polls += 1
-                if fingerprint == state.synced_fingerprint:
+                periodic_rescan_due = (
+                    profile.rescan_interval_seconds > 0.0
+                    and state.last_sync_at > 0.0
+                    and observed_at - state.last_sync_at
+                    >= profile.rescan_interval_seconds
+                )
+                if fingerprint == state.synced_fingerprint and not periodic_rescan_due:
                     state.status = "watching"
                     continue
                 if state.stable_polls < self._required_stable_polls:
@@ -348,4 +370,3 @@ _managed_library_watcher = ManagedLibraryWatcher()
 
 def get_managed_library_watcher() -> ManagedLibraryWatcher:
     return _managed_library_watcher
-

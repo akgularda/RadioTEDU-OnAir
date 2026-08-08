@@ -17,6 +17,19 @@ def test_foundation_tables_exist(tmp_path, monkeypatch):
     assert "command_outbox" in names
 
 
+def test_connection_supports_a_bounded_best_effort_timeout(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    init_db()
+
+    conn = get_connection(timeout_seconds=0.25)
+    try:
+        busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    finally:
+        conn.close()
+
+    assert busy_timeout == 250
+
+
 def test_init_db_migrates_legacy_queue_items_schema(tmp_path, monkeypatch):
     db_path = tmp_path / "legacy.db"
     monkeypatch.setenv("CLEANROOM_DB_PATH", str(db_path))

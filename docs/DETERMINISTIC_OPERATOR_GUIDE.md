@@ -80,4 +80,6 @@ cleanup and restoration.
 - If the wall says **Connection failed**, leave the current broadcast alone and click **Refresh** after the backend reconnects.
 - If an action's response disappears, wait for its verification phase. Do not click repeatedly; safe actions already retry and read back state.
 - Use **Run self-check** for output, dependencies, and AI details.
-- Use the tray application's **Restart backend** command if a packaged dependency repair explicitly requests a restart. The database and station queues persist across restart.
+- If the tray application owns the backend, use its **Restart backend** command when a packaged dependency repair explicitly requests a restart.
+- If Windows service supervision owns the backend, sign in as the OnAir administrator and use **Diagnostics → Reload backend safely**. OnAir stops scheduler/audio processes first, requeues interrupted items without changing order, and verifies that the supervisor created a different backend process. Only stations whose **Resume this station automatically when the app restarts** setting is enabled resume automatically.
+- If safe reload says the updated supervisor is not active, restart `RadioTEDU.BroadcastSupervisor` once from an elevated PowerShell window or reboot the PC. Future code reloads then use the in-app verified handoff instead of Windows service control.

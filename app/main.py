@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
@@ -23,6 +23,7 @@ from app.api.ha import router as ha_router
 from app.api.integrations import router as integrations_router
 from app.api.legacy import router as legacy_router
 from app.api.library_automation import router as library_automation_router
+from app.api.maintenance import router as maintenance_router
 from app.api.outbox import router as outbox_router
 from app.api.public import router as public_router
 from app.api.queue import router as queue_router
@@ -86,6 +87,120 @@ def _truthy_setting(raw: str, default: bool = False) -> bool:
     if token in {"0", "false", "no", "off"}:
         return False
     return bool(default)
+
+
+def _any_station_ai_enabled(conn) -> bool:
+    station_repo = StationRepository(conn)
+    settings_repo = SettingsRepository(conn)
+    return any(
+        int(row["id"]) > 0
+        and _truthy_setting(
+            settings_repo.get_station(int(row["id"])).get(
+                "ai_host_enabled", "false"
+            )
+        )
+        for row in station_repo.list_all()
+    )
+
+
+def _preload_startup_ai(conn, *, skip_startup_ai: bool) -> bool:
+    if skip_startup_ai:
+        logger.info("AI live playout preload skipped by CLEANROOM_SKIP_STARTUP_AI")
+        return False
+    if not _any_station_ai_enabled(conn):
+        logger.info("AI live playout preload skipped; AI is disabled for every station")
+        return False
+    try:
+        from app.services.ai_host_fast import get_ai_host_fast
+
+        ai = get_ai_host_fast()
+        ai_status = ai.preload_for_playout()
+        logger.info(
+            "AI live playout preload complete: llm_loaded=%s tts_provider=%s load_time=%.2fs",
+            bool(ai_status.get("llm_loaded", False)),
+            str(ai_status.get("tts_provider") or ""),
+            float(ai_status.get("load_time_seconds") or 0.0),
+        )
+        return True
+    except Exception as exc:
+        logger.warning("AI fast host live preload failed: %s", exc)
+        return False
+
+
+def _prime_startup_ai_prefetch(conn, *, skip_startup_ai: bool) -> int:
+    station_repo = StationRepository(conn)
+    settings_repo = SettingsRepository(conn)
+    enabled_stations: list[tuple[int, dict]] = []
+    for station in station_repo.list_all():
+        station_id = int(station["id"])
+        if station_id <= 0:
+            continue
+        station_settings = settings_repo.get_station(station_id)
+        if _truthy_setting(station_settings.get("ai_host_enabled", "false")):
+            enabled_stations.append((station_id, station_settings))
+            continue
+        settings_repo.upsert_station(
+            station_id,
+            {
+                "startup_ai_readiness_state": "disabled",
+                "startup_ai_ready_intro_count": "0",
+                "startup_ai_required_intro_count": "0",
+            },
+        )
+
+    if not enabled_stations:
+        logger.info("AI prefetch skipped; AI is disabled for every station")
+        return 0
+
+    from app.services.ai_prefetch import get_ai_prefetch, startup_buffer_target
+
+    prefetch = None if skip_startup_ai else get_ai_prefetch()
+    started = 0
+    for station_id, station_settings in enabled_stations:
+        required_intros = startup_buffer_target(station_settings)
+        try:
+            if prefetch is not None:
+                prefetch.start(station_id)
+                started += 1
+            readiness = (
+                {"ready_track_intros": 0}
+                if prefetch is None
+                else prefetch.readiness_snapshot(
+                    station_id, lookahead=required_intros
+                )
+            )
+            ready_count = int(readiness.get("ready_track_intros", 0) or 0)
+            settings_repo.upsert_station(
+                station_id,
+                {
+                    "startup_ai_readiness_state": (
+                        "ready" if ready_count >= required_intros else "warming"
+                    ),
+                    "startup_ai_ready_intro_count": str(ready_count),
+                    "startup_ai_required_intro_count": str(required_intros),
+                },
+            )
+            logger.info(
+                "AI prefetch startup for station %d: started=%s readiness=%s",
+                station_id,
+                prefetch is not None,
+                readiness,
+            )
+        except Exception as prime_exc:
+            logger.warning(
+                "AI prefetch prime failed for station %d: %s",
+                station_id,
+                prime_exc,
+            )
+            settings_repo.upsert_station(
+                station_id,
+                {
+                    "startup_ai_readiness_state": "warming",
+                    "startup_ai_ready_intro_count": "0",
+                    "startup_ai_required_intro_count": str(required_intros),
+                },
+            )
+    return started
 
 
 def _autostart_station_worker_loops(conn) -> None:
@@ -256,92 +371,20 @@ async def lifespan(_app: FastAPI):
         ha_coordinator.start()
 
         skip_startup_ai = _env_truthy("CLEANROOM_SKIP_STARTUP_AI")
-        # Warm the live AI pipeline before worker loops begin so the first
-        # track intro does not race a cold model load inside the worker tick.
-        if not skip_startup_ai:
-            try:
-                from app.services.ai_host_fast import get_ai_host_fast
+        # Warm optional AI only when an operator enabled it for at least one
+        # station. Core radio startup must never require an AI runtime.
+        _preload_startup_ai(conn, skip_startup_ai=skip_startup_ai)
 
-                ai = get_ai_host_fast()
-                ai_status = ai.preload_for_playout()
-                logger.info(
-                    "AI live playout preload complete: llm_loaded=%s tts_provider=%s load_time=%.2fs",
-                    bool(ai_status.get("llm_loaded", False)),
-                    str(ai_status.get("tts_provider") or ""),
-                    float(ai_status.get("load_time_seconds") or 0.0),
-                )
-            except Exception as exc:
-                logger.warning("AI fast host live preload failed: %s", exc)
-        else:
-            logger.info("AI live playout preload skipped by CLEANROOM_SKIP_STARTUP_AI")
-
-        # Prime the first upcoming AI intros before worker loops start, then keep
-        # prefetch running in the background while tracks are playing.
+        # Prime optional AI intros before worker loops start. When no station
+        # enables AI, no AI host or prefetch singleton is created.
         try:
-            from app.services.ai_prefetch import get_ai_prefetch, startup_buffer_target
-            from app.repositories.station_repo import StationRepository
-            station_repo = StationRepository(conn)
-            settings_repo = SettingsRepository(conn)
-            stations = list(station_repo.list_all())
-            prefetch = get_ai_prefetch()
-            for station in stations:
-                sid = int(station["id"])
-                if sid > 0:
-                    station_settings = settings_repo.get_station(sid)
-                    ai_enabled = str(station_settings.get("ai_host_enabled", "false")).strip().lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                    }
-                    required_intros = startup_buffer_target(station_settings)
-                    try:
-                        if ai_enabled and not skip_startup_ai:
-                            prefetch.start(sid)
-                        prime_result = (
-                            {"skipped": "ai disabled"}
-                            if not ai_enabled
-                            else (
-                                {"skipped": "CLEANROOM_SKIP_STARTUP_AI"}
-                                if skip_startup_ai
-                                else {"background_prefetch": "started"}
-                            )
-                        )
-                        readiness = (
-                            {"ready_track_intros": 0}
-                            if not ai_enabled or skip_startup_ai
-                            else prefetch.readiness_snapshot(sid, lookahead=required_intros)
-                        )
-                        logger.info(
-                            "AI prefetch primed for station %d: %s readiness=%s",
-                            sid,
-                            prime_result,
-                            readiness,
-                        )
-                        ready_count = int(readiness.get("ready_track_intros", 0) or 0)
-                        settings_repo.upsert_station(
-                            sid,
-                            {
-                                "startup_ai_readiness_state": (
-                                    "disabled"
-                                    if not ai_enabled
-                                    else ("ready" if ready_count >= required_intros else "warming")
-                                ),
-                                "startup_ai_ready_intro_count": str(ready_count),
-                                "startup_ai_required_intro_count": str(required_intros),
-                            },
-                        )
-                    except Exception as prime_exc:
-                        logger.warning("AI prefetch prime failed for station %d: %s", sid, prime_exc)
-                        settings_repo.upsert_station(
-                            sid,
-                            {
-                                "startup_ai_readiness_state": "warming",
-                                "startup_ai_ready_intro_count": "0",
-                                "startup_ai_required_intro_count": str(required_intros),
-                            },
-                        )
-            logger.info("AI prefetch started for %d station(s)", len(stations))
+            started_ai_prefetch = _prime_startup_ai_prefetch(
+                conn, skip_startup_ai=skip_startup_ai
+            )
+            logger.info(
+                "AI prefetch started for %d enabled station(s)",
+                started_ai_prefetch,
+            )
         except Exception as exc:
             logger.warning("AI prefetch startup failed: %s", exc)
 
@@ -415,6 +458,7 @@ app.include_router(users_router)
 app.include_router(roles_router)
 app.include_router(legacy_router)
 app.include_router(library_automation_router)
+app.include_router(maintenance_router)
 app.include_router(stations_router)
 app.include_router(studios_router)
 app.include_router(guest_room_router)
@@ -656,17 +700,19 @@ async def operation_log_middleware(request: Request, call_next):
                     station_id = None
             try:
                 init_db()
-                repo = LogRepository(get_connection())
-                repo.add_operation_log(
-                    station_id=station_id,
-                    message=f"{method} {path}",
-                    event_type="http",
-                    level="info" if response.status_code < 400 else "error",
-                    payload={
-                        "status_code": int(response.status_code),
-                        "request_id": str(getattr(request.state, "request_id", "") or ""),
-                    },
-                )
+                # Mutation logging is best-effort and must never hold an API
+                # acknowledgement behind the normal 30-second SQLite wait.
+                with closing(get_connection(timeout_seconds=0.25)) as log_conn:
+                    LogRepository(log_conn).add_operation_log(
+                        station_id=station_id,
+                        message=f"{method} {path}",
+                        event_type="http",
+                        level="info" if response.status_code < 400 else "error",
+                        payload={
+                            "status_code": int(response.status_code),
+                            "request_id": str(getattr(request.state, "request_id", "") or ""),
+                        },
+                    )
                 user = getattr(request.state, "current_user", None)
                 actor_id = int(user.get("id")) if isinstance(user, dict) and user.get("id") else None
                 audit_chain.append(

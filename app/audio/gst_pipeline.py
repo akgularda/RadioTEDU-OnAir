@@ -30,6 +30,7 @@ class StationPipelineConfig:
     icecast_public: bool = True
     icecast_user_agent: str = "RadioTEDU OnAir"
     icecast_tls_enabled: bool = False
+    icecast_legacy_source_enabled: bool = False
     extra_icecast_outputs: tuple[dict, ...] = ()
 
 

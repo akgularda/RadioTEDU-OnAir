@@ -69,6 +69,9 @@ def test_icecast_test_protocol_args_match_tls_production_transport():
     ) == ["-tls", "1"]
     assert _icecast_test_protocol_args(
         {"icecast_port": 8000, "icecast_tls_enabled": False}
+    ) == []
+    assert _icecast_test_protocol_args(
+        {"icecast_port": 8000, "icecast_legacy_source_enabled": True}
     ) == ["-legacy_icecast", "1"]
 
 

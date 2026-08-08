@@ -11,11 +11,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.config import get_public_base_url
 from app.db import get_connection, init_db
 from app.repositories.settings_repo import SettingsRepository
 from app.repositories.station_output_repo import StationOutputRepository
 from app.security.credential_vault import resolve_credential_value, store_system_secret
 from app.services.audit_chain import audit_chain
+from app.services.audio_stream_probe import probe_configured_audio
 from app.services.ha_coordinator import ha_coordinator
 from app.services.replication_journal import canonical_json, replication_journal
 
@@ -23,6 +25,21 @@ _PROFILES = {
     "mp3_128": {"bitrate": 128, "label": "Most compatible — MP3 128 kbps"},
     "aac_plus_196": {"bitrate": 196, "label": "Higher quality — AAC+ 196 kbps"},
 }
+
+_OUTPUT_SETTING_KEYS = (
+    "output_mode",
+    "speaker_monitor_enabled",
+    "output_device_id",
+    "icecast_host",
+    "icecast_port",
+    "icecast_mount",
+    "icecast_username",
+    "icecast_password",
+    "icecast_tls_enabled",
+    "output_gain_db",
+    "stream_codec_profile",
+    "stream_bitrate_kbps",
+)
 
 
 def _hash_config(config: dict) -> str:
@@ -252,10 +269,16 @@ class StreamConfigService:
 
     @staticmethod
     def _snapshot_output(row, station_settings: dict) -> dict:
-        if row is None:
-            return {}
-        payload = dict(row)
-        payload["icecast_tls_enabled"] = str(station_settings.get("icecast_tls_enabled", "false")).lower() in {"1", "true", "yes", "on"}
+        payload = dict(row) if row is not None else {}
+        payload["_station_output_present"] = row is not None
+        payload["_station_settings"] = {
+            key: str(station_settings[key])
+            for key in _OUTPUT_SETTING_KEYS
+            if key in station_settings
+        }
+        payload["icecast_tls_enabled"] = str(
+            station_settings.get("icecast_tls_enabled", "false")
+        ).lower() in {"1", "true", "yes", "on"}
         return payload
 
     def apply(self, draft_id: int, *, actor_id: int, idempotency_key: str, override_reason: str = "") -> dict:
@@ -296,6 +319,9 @@ class StreamConfigService:
             conn.close()
         runtime_registry = None
         runtime_before = {"running": False}
+        verification_output: dict = {}
+        verification_station_settings: dict = {}
+        verification_public_base_url = ""
         try:
             ha_coordinator.require_safe_mutation(override_reason=override_reason)
             journal = replication_journal.append("stream_config", draft_id, "apply", _public_config(config))
@@ -324,7 +350,8 @@ class StreamConfigService:
                     stream_codec_profile=str(config["stream_codec_profile"]),
                     stream_bitrate_kbps=int(config["stream_bitrate_kbps"]),
                 )
-                SettingsRepository(repo_conn).upsert_station(
+                settings_repository = SettingsRepository(repo_conn)
+                settings_repository.upsert_station(
                     station_id,
                     {
                         "output_mode": "icecast" if config["icecast_enabled"] else "speaker",
@@ -343,12 +370,26 @@ class StreamConfigService:
                 )
                 stored = repo.get_raw(station_id)
                 verified = bool(stored and str(stored["icecast_host"]) == str(config["icecast_host"]) and str(stored["icecast_mount"]) == str(config["icecast_mount"]))
+                verification_output = dict(stored) if stored is not None else {}
+                verification_station_settings = settings_repository.get_station(
+                    station_id
+                )
+                system_settings = settings_repository.get_system()
+                verification_public_base_url = str(
+                    get_public_base_url()
+                    or system_settings.get("stream_public_base_url")
+                    or ""
+                ).strip()
             finally:
                 repo_conn.close()
             if not verified:
                 raise StreamConfigError("authoritative_readback_failed")
             live_verified = False
-            if runtime_registry is not None and bool(runtime_before.get("running")) and runtime_before.get("active_input_uri"):
+            listener_audio_verified = False
+            verification_seconds = 0.0
+            if runtime_registry is not None and bool(runtime_before.get("running")):
+                if not runtime_before.get("active_input_uri"):
+                    raise StreamConfigError("active_runtime_input_unavailable")
                 restarted = runtime_registry.start_station(
                     station_id,
                     str(runtime_before["active_input_uri"]),
@@ -356,25 +397,69 @@ class StreamConfigService:
                     stream_artist=str(runtime_before.get("stream_artist") or ""),
                     track_type=str(runtime_before.get("track_type") or "music"),
                 )
-                live_verified = bool(restarted.get("running") and restarted.get("output_feed_active"))
-                if not live_verified:
+                if not bool(
+                    restarted.get("running")
+                    and restarted.get("output_feed_active")
+                ):
                     raise StreamConfigError("live_output_readback_failed")
                 verification_seconds = max(
                     1.0,
                     min(60.0, float(os.getenv("CLEANROOM_STREAM_VERIFY_SECONDS", "60") or 60)),
                 )
                 deadline = time.monotonic() + verification_seconds
+                listener_successes = 0
+                consecutive_listener_failures = 0
+                last_listener_ok = not bool(config["icecast_enabled"])
                 while time.monotonic() < deadline:
                     time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
                     observed = runtime_registry.status(station_id)
                     if not bool(observed.get("running") and observed.get("output_feed_active")):
                         raise StreamConfigError("live_output_verification_window_failed")
+                    if bool(config["icecast_enabled"]):
+                        listener_probe = probe_configured_audio(
+                            verification_output,
+                            verification_station_settings,
+                            verification_public_base_url,
+                            timeout=min(2.0, max(0.2, verification_seconds)),
+                        )
+                        last_listener_ok = bool(listener_probe.ok)
+                        if last_listener_ok:
+                            listener_successes += 1
+                            consecutive_listener_failures = 0
+                        else:
+                            consecutive_listener_failures += 1
+                            if consecutive_listener_failures >= 2:
+                                raise StreamConfigError(
+                                    "listener_audio_verification_failed"
+                                )
+                required_listener_successes = (
+                    2 if verification_seconds >= 2.0 else 1
+                )
+                listener_audio_verified = bool(
+                    not config["icecast_enabled"]
+                    or (
+                        last_listener_ok
+                        and listener_successes >= required_listener_successes
+                    )
+                )
+                if not listener_audio_verified:
+                    raise StreamConfigError("listener_audio_verification_failed")
+                live_verified = True
             result = {
                 "outcome": "ready",
-                "message": "The protected configuration was applied and read back.",
+                "message": (
+                    "The protected configuration was applied, read back, and "
+                    "verified at the listener."
+                    if live_verified
+                    else "The protected configuration was saved and read back; "
+                    "listener verification is deferred until the station starts."
+                ),
                 "journal": journal,
                 "live_output_verified": live_verified,
-                "verification_window_seconds": 60 if live_verified else 0,
+                "listener_audio_verified": listener_audio_verified,
+                "verification_window_seconds": (
+                    verification_seconds if live_verified else 0
+                ),
             }
             conn = get_connection()
             try:
@@ -417,21 +502,60 @@ class StreamConfigService:
             if not previous:
                 return
             station_id = int(operation["station_id"])
-            StationOutputRepository(conn).upsert(
-                station_id=station_id,
-                local_output_enabled=bool(previous.get("local_output_enabled")),
-                output_device_id=str(previous.get("output_device_id") or ""),
-                icecast_enabled=bool(previous.get("icecast_enabled")),
-                icecast_host=str(previous.get("icecast_host") or "127.0.0.1"),
-                icecast_port=int(previous.get("icecast_port") or 8000),
-                icecast_mount=str(previous.get("icecast_mount") or "/stream"),
-                icecast_user=str(previous.get("icecast_user") or "source"),
-                icecast_password=str(previous.get("icecast_password") or ""),
-                output_gain_db=float(previous.get("output_gain_db") or 0),
-                stream_codec_profile=str(previous.get("stream_codec_profile") or "mp3_128"),
-                stream_bitrate_kbps=int(previous.get("stream_bitrate_kbps") or 128),
+            output_was_present = bool(
+                previous.get(
+                    "_station_output_present",
+                    bool(previous.get("icecast_host")),
+                )
             )
-            SettingsRepository(conn).upsert_station(station_id, {"icecast_tls_enabled": str(bool(previous.get("icecast_tls_enabled"))).lower()})
+            if output_was_present:
+                StationOutputRepository(conn).upsert(
+                    station_id=station_id,
+                    local_output_enabled=bool(previous.get("local_output_enabled")),
+                    output_device_id=str(previous.get("output_device_id") or ""),
+                    icecast_enabled=bool(previous.get("icecast_enabled")),
+                    icecast_host=str(previous.get("icecast_host") or "127.0.0.1"),
+                    icecast_port=int(previous.get("icecast_port") or 8000),
+                    icecast_mount=str(previous.get("icecast_mount") or "/stream"),
+                    icecast_user=str(previous.get("icecast_user") or "source"),
+                    icecast_password=str(previous.get("icecast_password") or ""),
+                    output_gain_db=float(previous.get("output_gain_db") or 0),
+                    stream_codec_profile=str(previous.get("stream_codec_profile") or "mp3_128"),
+                    stream_bitrate_kbps=int(previous.get("stream_bitrate_kbps") or 128),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM station_outputs WHERE station_id=?",
+                    (station_id,),
+                )
+                conn.commit()
+
+            settings_snapshot = previous.get("_station_settings")
+            if isinstance(settings_snapshot, dict):
+                placeholders = ",".join("?" for _ in _OUTPUT_SETTING_KEYS)
+                conn.execute(
+                    "DELETE FROM station_settings WHERE station_id=? "
+                    f"AND key IN ({placeholders})",
+                    (station_id, *_OUTPUT_SETTING_KEYS),
+                )
+                conn.commit()
+                SettingsRepository(conn).upsert_station(
+                    station_id,
+                    {
+                        str(key): str(value)
+                        for key, value in settings_snapshot.items()
+                        if key in _OUTPUT_SETTING_KEYS
+                    },
+                )
+            else:
+                SettingsRepository(conn).upsert_station(
+                    station_id,
+                    {
+                        "icecast_tls_enabled": str(
+                            bool(previous.get("icecast_tls_enabled"))
+                        ).lower()
+                    },
+                )
         finally:
             conn.close()
 

@@ -143,6 +143,10 @@ def _station_stream_feature_settings(
             station_settings.get("icecast_tls_enabled", "false"),
             False,
         ),
+        "icecast_legacy_source_enabled": _truthy(
+            station_settings.get("icecast_legacy_source_enabled", "false"),
+            False,
+        ),
     }
 
 
@@ -452,10 +456,21 @@ class StationRuntimeRegistry:
         self._metadata_worker_lock = threading.Lock()
         self._recovery_lock = threading.RLock()
         self._recovery_state: dict[int, dict] = {}
+        self._operation_locks_lock = threading.Lock()
+        self._operation_locks: dict[int, threading.RLock] = {}
         if self._live_mic_registry is not None:
             register_listener = getattr(self._live_mic_registry, "register_listener", None)
             if callable(register_listener):
                 register_listener(self._handle_live_mic_event)
+
+    def _operation_lock(self, station_id: int) -> threading.RLock:
+        sid = int(station_id)
+        with self._operation_locks_lock:
+            lock = self._operation_locks.get(sid)
+            if lock is None:
+                lock = threading.RLock()
+                self._operation_locks[sid] = lock
+            return lock
 
     def _ensure_metadata_worker(self, station_id: int) -> threading.Event:
         sid = int(station_id)
@@ -1037,6 +1052,28 @@ class StationRuntimeRegistry:
         stream_artist: str = "",
         track_type: str = "music",
         crossfade_seconds: float | None = None,
+        start_offset_seconds: float = 0.0,
+    ) -> dict:
+        with self._operation_lock(station_id):
+            return self._start_station_unlocked(
+                station_id=station_id,
+                input_uri=input_uri,
+                stream_title=stream_title,
+                stream_artist=stream_artist,
+                track_type=track_type,
+                crossfade_seconds=crossfade_seconds,
+                start_offset_seconds=start_offset_seconds,
+            )
+
+    def _start_station_unlocked(
+        self,
+        station_id: int,
+        input_uri: str,
+        stream_title: str = "",
+        stream_artist: str = "",
+        track_type: str = "music",
+        crossfade_seconds: float | None = None,
+        start_offset_seconds: float = 0.0,
     ) -> dict:
         init_db()
         conn = get_connection()
@@ -1096,11 +1133,19 @@ class StationRuntimeRegistry:
             extra_icecast_outputs=_extra_icecast_outputs(settings, station_id, row),
             **stream_features,
         )
+        # Release the per-track configuration connection before process
+        # startup.  Long-running stations change tracks indefinitely; relying
+        # on interpreter garbage collection here can retain SQLite handles and
+        # WAL readers under sustained operation.
+        conn.close()
 
         runtime = self._get_or_create(station_id)
         self.refresh_live_audio_settings(station_id)
         metadata_generation = self._next_metadata_generation(station_id)
-        runtime.start(cfg)
+        runtime.start(
+            cfg,
+            start_offset_seconds=max(0.0, float(start_offset_seconds or 0.0)),
+        )
         with self._recovery_lock:
             self._recovery_state.pop(int(station_id), None)
         if bool(cfg.icecast_enabled):
@@ -1119,6 +1164,10 @@ class StationRuntimeRegistry:
         return self.status(station_id)
 
     def stop_station(self, station_id: int) -> dict:
+        with self._operation_lock(station_id):
+            return self._stop_station_unlocked(station_id)
+
+    def _stop_station_unlocked(self, station_id: int) -> dict:
         runtime = self._runtimes.get(station_id)
         if runtime:
             runtime.stop()
@@ -1246,6 +1295,12 @@ class StationRuntimeRegistry:
         }
 
     def recover_station(self, station_id: int, *, force: bool = False) -> dict:
+        with self._operation_lock(station_id):
+            return self._recover_station_unlocked(station_id, force=force)
+
+    def _recover_station_unlocked(
+        self, station_id: int, *, force: bool = False
+    ) -> dict:
         """Attempt a bounded, offset-preserving rebuild of required outputs."""
         sid = int(station_id)
         runtime = self._runtimes.get(sid)

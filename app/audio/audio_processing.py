@@ -27,7 +27,7 @@ def _get_ffprobe() -> str:
     return path
 
 
-def _probe_duration(file_path: str) -> float:
+def _probe_duration(file_path: str, *, timeout_seconds: float = 30.0) -> float:
     """Get duration of an audio file in seconds."""
     ffprobe = _get_ffprobe()
     cmd = [
@@ -39,7 +39,11 @@ def _probe_duration(file_path: str) -> float:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+            cmd,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(0.1, float(timeout_seconds)),
         )
         if result.returncode != 0:
             return 0.0
@@ -49,9 +53,9 @@ def _probe_duration(file_path: str) -> float:
         return 0.0
 
 
-def probe_duration(file_path: str) -> float:
+def probe_duration(file_path: str, *, timeout_seconds: float = 30.0) -> float:
     """Public duration probe helper for callers outside this module."""
-    return _probe_duration(file_path)
+    return _probe_duration(file_path, timeout_seconds=timeout_seconds)
 
 
 def _detect_silence_regions(

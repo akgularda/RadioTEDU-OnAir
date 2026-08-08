@@ -30,6 +30,8 @@ def test_installer_setup_supports_scope_shortcuts_launch_and_bootstrap():
     assert '[UninstallRun]' in text
     assert 'ConfigureHealthWallStartup.ps1"" -Mode Remove' in text
     assert "RadioTEDU-OnAir-Agent.exe" in text
+    assert 'IconFilename: "{app}\\RadioTEDU-OnAir-Agent.exe"; IconIndex: 0' in text
+    assert 'IconFilename: "{app}\\shell\\RadioTEDU-OnAir.exe"; IconIndex: 0' in text
     assert "..\\dist\\desktop\\shell\\*" in text
     assert "EnsureDesktopPrerequisites.ps1" in text
     assert "-InstallDotNetDesktopRuntime" in text
@@ -74,6 +76,69 @@ def test_official_desktop_bundle_requires_self_contained_publish():
 
     assert '[bool]$AllowFrameworkDependentFallback = $false' in text
     assert "-SelfContained $true" in text
+
+
+def test_desktop_executables_embed_the_radiotedu_application_icon():
+    root = Path(__file__).resolve().parents[2]
+    icon = root / "app" / "static" / "icons" / "icon.ico"
+    assert icon.is_file() and icon.stat().st_size > 0
+    for project in (
+        root / "desktop" / "src" / "CleanroomRadio.Agent" / "CleanroomRadio.Agent.csproj",
+        root / "desktop" / "src" / "CleanroomRadio.Shell" / "CleanroomRadio.Shell.csproj",
+    ):
+        text = project.read_text(encoding="utf-8")
+        assert "<ApplicationIcon>../../../app/static/icons/icon.ico</ApplicationIcon>" in text
+
+
+def test_ci_installer_and_backend_build_use_exact_python_dependency_lock():
+    root = Path(__file__).resolve().parents[2]
+    lock_path = root / "requirements.lock"
+    lock_lines = [
+        line.strip()
+        for line in lock_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert lock_lines
+    assert all("==" in line for line in lock_lines)
+    for required in (
+        "fastapi==",
+        "pydantic==",
+        "python-multipart==",
+        "requests==",
+        "uvicorn==",
+        "websockets==",
+    ):
+        assert any(line.startswith(required) for line in lock_lines)
+
+    ci = (root / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    installer_build = (root / "installer" / "build_setup.ps1").read_text(
+        encoding="utf-8"
+    )
+    backend_build = (root / "build_backend_onefile.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "pip install --only-binary=:all: -r requirements.lock" in ci
+    assert 'python-version: "3.12"' in ci
+    assert "python -m pip check" in ci
+    assert '..\\requirements.lock"' in installer_build
+    assert "--only-binary=:all:" in installer_build
+    assert 'Join-Path $root "requirements.lock"' in backend_build
+    assert '-m venv $buildVenv' in backend_build
+    assert '$env:PYTHONPATH = ""' in backend_build
+    assert "-m pip check" in backend_build
+    assert "--target $localPythonPackages" not in backend_build
+    assert '"pyinstaller-hooks-contrib==2026.6"' in backend_build
+    assert "Get-BackendSourceFingerprint" in backend_build
+    assert "Backend source changed during packaging" in backend_build
+    assert 'Join-Path $stagedOut "build-provenance.json"' in backend_build
+
+    smoke = (root / "tools" / "smoke_stable_backend.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert '"CLEANROOM_TOOLS_DIR"' in smoke
+    assert '$env:CLEANROOM_TOOLS_DIR = Join-Path $smokeRoot "tools"' in smoke
 
 
 def test_prerequisite_bootstrap_detects_per_user_webview2_runtime_via_registry(tmp_path):
@@ -210,7 +275,8 @@ def test_build_setup_script_installs_python_requirements_before_packaging():
     text = (root / "installer" / "build_setup.ps1").read_text(encoding="utf-8").lower()
 
     assert "pip install -r" in text
-    assert "requirements.txt" in text
+    assert "requirements.lock" in text
+    assert "--only-binary=:all:" in text
 
 
 def test_installer_source_is_documented_as_open_source():

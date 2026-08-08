@@ -35,7 +35,7 @@ _RESTART_SUPPRESSION: dict[
     tuple[int, str, int],
     dict[str, float | int | str],
 ] = {}
-_MAX_RESTART_ATTEMPTS_PER_ITEM = 1
+_MAX_RESTART_ATTEMPTS_PER_ITEM = 3
 _RESTART_COOLDOWN_SEC = 180.0
 _TRANSIENT_OUTPUT_FAILURE_MARKERS = (
     "error number -10054",
@@ -244,7 +244,12 @@ class StationWorker:
         try:
             from app.audio import audio_processing
 
-            duration = float(audio_processing.probe_duration(str(candidate)))
+            duration = float(
+                audio_processing.probe_duration(
+                    str(candidate),
+                    timeout_seconds=5.0,
+                )
+            )
         except Exception:
             _log.warning("Could not probe duration for track %d", int(track_id), exc_info=True)
             return 0.0
@@ -967,7 +972,12 @@ class StationWorker:
         state["reason"] = ""
         return True, ""
 
-    def _restart_playing_queue_item_if_runtime_mismatched(self, playing) -> bool:
+    def _restart_playing_queue_item_if_runtime_mismatched(
+        self,
+        playing,
+        *,
+        start_offset_seconds: float = 0.0,
+    ) -> bool:
         if not self.runtime_registry or not playing:
             return False
         item_id = int(playing["id"])
@@ -1003,6 +1013,7 @@ class StationWorker:
                 stream_artist=artist,
                 track_type=track_type,
                 crossfade_seconds=0.0,
+                start_offset_seconds=max(0.0, float(start_offset_seconds or 0.0)),
             )
             self._set_playout_state(
                 "manual", item_id, reason="manual_runtime_recovered"
@@ -1051,10 +1062,35 @@ class StationWorker:
         ).total_seconds()
         duration = float(playing["duration"] or 0.0)
 
+        # Only subtract crossfade when both current AND next tracks are
+        # music, because crossfade only applies to music→music transitions.
+        # For jingle→music or music→jingle the runtime does a hard restart,
+        # so we must let the current track play its full duration.
+        crossfade = 0.0
+        current_type = str(playing["track_type"] or "music").strip().lower()
+        next_type = ""
+        if current_type == "music":
+            next_pending = self.queue_repo.next_pending(self.station_id)
+            if next_pending:
+                try:
+                    next_type = str(next_pending["track_type"] or "music").strip().lower()
+                except (KeyError, IndexError):
+                    next_type = "music"
+                if next_type == "music":
+                    crossfade = self._default_crossfade_seconds()
+        advance_at = max(0.0, duration - crossfade)
+
         # A healthy encoder process can still be rendering the wrong file after
         # a stale queue transition. Process liveness alone must not freeze the
         # queue indefinitely; reconcile its active URI with the playing row.
-        if self.runtime_registry:
+        #
+        # Only treat a divergent active URI as a fault while the track should
+        # still be playing. Short jingles (e.g. the 1s sweeper) finish between
+        # worker polls; once elapsed time has passed the track's natural end
+        # (advance_at) the runtime correctly moves on, so a URI "mismatch" is
+        # expected and the item must be allowed to complete rather than being
+        # restarted/failed.
+        if self.runtime_registry and elapsed < advance_at:
             rt_status = self.runtime_registry.status(self.station_id)
             track_uri, _title, _artist, _track_type = self._track_runtime_fields(
                 int(playing["track_id"] or 0)
@@ -1064,8 +1100,23 @@ class StationWorker:
                 and self._runtime_playback_alive(rt_status)
                 and not self._runtime_playback_matches(rt_status, track_uri)
             ):
+                if current_type == "jingle":
+                    # Station IDs and sweepers are at-most-once elements. A
+                    # 1-second jingle can finish between worker polls while the
+                    # runtime has already moved or recovered. Restarting it from
+                    # byte zero is more harmful than completing it once.
+                    _log.info(
+                        "Completing at-most-once jingle queue item %s after runtime advanced",
+                        int(playing["id"]),
+                    )
+                    self._complete_queue_item(playing)
+                    return True
                 return self._restart_playing_queue_item_if_runtime_mismatched(
-                    playing
+                    playing,
+                    start_offset_seconds=min(
+                        max(0.0, elapsed),
+                        max(0.0, duration - 0.25),
+                    ),
                 )
 
         # ── Safety: absolute max timeout per track ────────────
@@ -1101,24 +1152,6 @@ class StationWorker:
                     return True
             return False
 
-        # Only subtract crossfade when both current AND next tracks are
-        # music, because crossfade only applies to music→music transitions.
-        # For jingle→music or music→jingle the runtime does a hard restart,
-        # so we must let the current track play its full duration.
-        crossfade = 0.0
-        current_type = str(playing["track_type"] or "music").strip().lower()
-        next_type = ""
-        if current_type == "music":
-            next_pending = self.queue_repo.next_pending(self.station_id)
-            if next_pending:
-                try:
-                    next_type = str(next_pending["track_type"] or "music").strip().lower()
-                except (KeyError, IndexError):
-                    next_type = "music"
-                if next_type == "music":
-                    crossfade = self._default_crossfade_seconds()
-        advance_at = max(0.0, duration - crossfade)
-
         if elapsed >= advance_at:
             music_crossfade_due = (
                 current_type == "music"
@@ -1128,7 +1161,18 @@ class StationWorker:
             if self.runtime_registry and not music_crossfade_due:
                 rt_status = self.runtime_registry.status(self.station_id)
                 if self._runtime_playback_alive(rt_status):
-                    return False
+                    # Only wait if the runtime is still rendering THIS track.
+                    # A jingle that has finished is immediately followed by the
+                    # next item, so the runtime stays alive; if it is playing a
+                    # different source the current item has run its course and
+                    # must be completed rather than hanging in "playing" forever.
+                    current_track_uri, _, _, _ = self._track_runtime_fields(
+                        int(playing["track_id"] or 0)
+                    )
+                    if current_track_uri and self._runtime_playback_matches(
+                        rt_status, current_track_uri
+                    ):
+                        return False
             self._complete_queue_item(playing)
             return True
 
@@ -1137,11 +1181,24 @@ class StationWorker:
         if self.runtime_registry:
             rt_status = self.runtime_registry.status(self.station_id)
             if not self._runtime_playback_alive(rt_status):
+                if current_type == "jingle":
+                    _log.info(
+                        "Completing at-most-once jingle queue item %s after runtime ended",
+                        int(playing["id"]),
+                    )
+                    self._complete_queue_item(playing)
+                    return True
                 _log.warning(
                     "Runtime dead before duration elapsed (%.1f/%.1fs), recovering queue item %d",
                     elapsed, duration, int(playing["id"]),
                 )
-                self._restart_playing_queue_item_if_runtime_mismatched(playing)
+                self._restart_playing_queue_item_if_runtime_mismatched(
+                    playing,
+                    start_offset_seconds=min(
+                        max(0.0, elapsed),
+                        max(0.0, duration - 0.25),
+                    ),
+                )
                 return False
 
         return False
@@ -1190,6 +1247,19 @@ class StationWorker:
         if not self._is_startup_sound_pending():
             return False
 
+        # A restart can preserve an automatic sweeper at the front of the
+        # queue. Inserting another startup jingle ahead of it would create the
+        # exact double-RadioTEDU-jingle failure operators reported. Treat the
+        # preserved front jingle as satisfying the startup identity and clear
+        # the one-shot flag without changing queue order.
+        if self._next_pending_is_jingle():
+            self._clear_startup_sound_pending()
+            _log.info(
+                "Startup sound suppressed for station %s because the preserved queue already starts with a jingle",
+                self.station_id,
+            )
+            return False
+
         cfg = self._get_startup_sound_settings()
         if not cfg["enabled"]:
             self._clear_startup_sound_pending()
@@ -1232,14 +1302,24 @@ class StationWorker:
         insert_pos = max(1, min_pos - 1)
 
         cur.execute(
-            "INSERT INTO queue_items (station_id, track_id, position, status, dedupe_key) "
+            "INSERT OR IGNORE INTO queue_items (station_id, track_id, position, status, dedupe_key) "
             "VALUES (?, ?, ?, 'pending', ?)",
             (self.station_id, track_id, insert_pos, f"startup_sound:{track_id}"),
         )
+        inserted = int(cur.rowcount or 0) > 0
+        # Clear the one-shot flag in the same transaction as the queue insert.
+        # A crash can no longer commit the jingle but leave it pending for a
+        # second worker pass.
+        cur.execute(
+            "INSERT INTO station_settings (station_id, key, value) "
+            "VALUES (?, '_startup_sound_pending', 'false') "
+            "ON CONFLICT(station_id, key) DO UPDATE SET value='false'",
+            (self.station_id,),
+        )
         self.conn.commit()
-        self._clear_startup_sound_pending()
-        _log.info("Startup sound: inserted track_id=%d at front of queue", track_id)
-        return True
+        if inserted:
+            _log.info("Startup sound: inserted track_id=%d at front of queue", track_id)
+        return inserted
 
     def _get_sweeper_settings(self) -> dict:
         """Read sweeper config from station_settings."""
@@ -1412,7 +1492,7 @@ class StationWorker:
         insert_pos = max(1, min_pos - 1)
 
         cur.execute(
-            "INSERT INTO queue_items (station_id, track_id, position, status, dedupe_key) "
+            "INSERT OR IGNORE INTO queue_items (station_id, track_id, position, status, dedupe_key) "
             "VALUES (?, ?, ?, 'pending', ?)",
             (self.station_id, jingle["track_id"], insert_pos,
              f"jingle:{jingle['track_id']}:{insert_pos}"),
@@ -1493,6 +1573,8 @@ class StationWorker:
             f"finished_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
             tuple(invalid_ids),
         )
+        if int(cur.rowcount or 0) <= 0:
+            return False
         self.conn.commit()
 
         current = self.playout_state.get_current(self.station_id)
@@ -1621,11 +1703,20 @@ class StationWorker:
                 jingle = self._pick_random_jingle()
                 if jingle:
                     cur.execute(
-                        "INSERT INTO queue_items (station_id, track_id, position, status, dedupe_key) "
+                        "INSERT OR IGNORE INTO queue_items (station_id, track_id, position, status, dedupe_key) "
                         "VALUES (?, ?, ?, 'pending', ?)",
                         (self.station_id, jingle["track_id"], next_pos,
                          f"jingle:{jingle['track_id']}:{next_pos}"),
                     )
+                    if int(cur.rowcount or 0) <= 0:
+                        cur.execute(
+                            "SELECT COALESCE(MAX(position), 0) + 1 AS next_pos "
+                            "FROM queue_items WHERE station_id=?",
+                            (self.station_id,),
+                        )
+                        next_pos = int(cur.fetchone()["next_pos"])
+                        music_in_pending = 0
+                        continue
                     next_pos += 1
                     added += 1
                     music_in_pending = 0

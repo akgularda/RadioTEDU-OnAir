@@ -89,7 +89,7 @@ public class ShellBootstrapperTests
             var expectedPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "RadioTEDU OnAir",
-                "EBWebView");
+                "EBWebView-OnAir");
 
             Assert.NotNull(webView.CreationProperties);
             Assert.Equal(expectedPath, webView.CreationProperties!.UserDataFolder);

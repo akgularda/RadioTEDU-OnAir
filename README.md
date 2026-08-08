@@ -65,6 +65,7 @@ Mutation requests are followed by authoritative read-back checks. Safe/idempoten
 
 ## Daily Commands
 
+- Install the verified dependency graph: `python -m pip install --only-binary=:all: -r requirements.lock`
 - Run locally: `uvicorn app.main:app --reload`
 - Run the local launcher: `python run_cleanroom.py`
 - Verify foundation changes: `python -m pytest tests -q`
@@ -76,6 +77,21 @@ Mutation requests are followed by authoritative read-back checks. Safe/idempoten
 - Smoke-test desktop release artifacts: `powershell -ExecutionPolicy Bypass -File .\smoke_test_desktop_bundle.ps1`
 
 Local development stays simple: `uvicorn app.main:app --reload` or `python run_cleanroom.py`.
+
+`requirements.txt` is the human-maintained direct-dependency input.
+`requirements.lock` is the exact Windows test/runtime graph used by CI,
+installer builds, and backend packaging. Dependency updates are intentional
+release changes: update both files, then rerun the complete Python, browser
+contract, JavaScript syntax, desktop, packaging, and smoke-test gates.
+
+## License and publication status
+
+The application is currently a proprietary TED University distribution under
+`LICENSE.md`; only the installer-authoring source has the separate MIT license
+in `installer/LICENSE.md`. The repository must not be described or published
+as an open-source application until TED University selects an application
+license and completes the legal, trademark, dependency, clean-machine, and
+broadcast gates in `docs/OPEN_SOURCE_RELEASE_CHECKLIST.md`.
 
 ## For Stations And Operators
 
@@ -186,7 +202,7 @@ after provisioning; secret values deliberately remain invisible.
 - The installer launches `RadioTEDU-OnAir-Agent.exe`, which opens the branded desktop app instead of a browser tab.
 - The backend is installed as a packaged bundle and launched hidden by the tray agent, so no visible CMD window is shown during normal use.
 - Clicking the window close button sends RadioTEDU OnAir to the system tray instead of exiting.
-- Use the tray menu to open the panel, restart the backend, or stop the app completely after confirmation.
+- Use the tray menu to open the panel, restart an Agent-owned backend, or stop the app completely after confirmation. Service-owned deployments use **Diagnostics → Reload backend safely**, which preserves queue order and verifies a new backend process before reporting success.
 
 Run `powershell -ExecutionPolicy Bypass -File .\smoke_test_desktop_bundle.ps1` after `build_setup.ps1` to validate the exact installer path recorded in `release\setup\last_setup_path.txt` and the exact backend artifact recorded in `last_build_path.txt`, then smoke-test the packaged backend on an automatically allocated free loopback port with `CLEANROOM_OPEN_PANEL=0`.
 

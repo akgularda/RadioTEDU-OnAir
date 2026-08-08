@@ -36,6 +36,14 @@ class HealthEndpointTests(unittest.TestCase):
             ), patch.object(
                 health_api.worker_loop_manager, "snapshot", return_value={}
             ), patch.object(
+                health_api,
+                "database_health_snapshot",
+                return_value={
+                    "healthy": True,
+                    "state": "operational",
+                    "integrity": "ok",
+                },
+            ), patch.object(
                 health_api, "describe_dependency", return_value={"found": True}
             ), patch.object(
                 health_api, "read_bootstrap_state", return_value={}

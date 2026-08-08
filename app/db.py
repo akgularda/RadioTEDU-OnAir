@@ -404,6 +404,24 @@ def _migrate_queue_items(cur) -> None:
     cur.execute(
         "UPDATE queue_items SET enqueued_at=CURRENT_TIMESTAMP WHERE enqueued_at IS NULL"
     )
+    # Only one active automatic command may own a station/dedupe key. Older
+    # builds allowed duplicate guards to enqueue the same jingle or recovery
+    # item. Preserve the playing/oldest row and terminally quarantine extras
+    # before creating the concurrency barrier below.
+    cur.execute(
+        "WITH ranked AS ("
+        "SELECT id, ROW_NUMBER() OVER ("
+        "PARTITION BY station_id, dedupe_key "
+        "ORDER BY CASE status WHEN 'playing' THEN 0 ELSE 1 END, id"
+        ") AS ordinal "
+        "FROM queue_items "
+        "WHERE status IN ('pending', 'playing') "
+        "AND dedupe_key IS NOT NULL AND TRIM(dedupe_key) <> ''"
+        ") "
+        "UPDATE queue_items SET status='failed', "
+        "finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) "
+        "WHERE id IN (SELECT id FROM ranked WHERE ordinal > 1)"
+    )
 
 
 def _migrate_schedule_items(cur) -> None:
@@ -1036,19 +1054,26 @@ def _backup_database_before_schema_migration(db_path: Path) -> Path:
                 pass
 
 
-def get_connection():
+def get_connection(*, timeout_seconds: float = 30.0):
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
+    safe_timeout = max(0.05, float(timeout_seconds))
+    busy_timeout_ms = max(50, int(safe_timeout * 1000.0))
+    conn = sqlite3.connect(
+        str(db_path),
+        check_same_thread=False,
+        timeout=safe_timeout,
+    )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
     try:
-        for attempt in range(6):
+        journal_attempts = 6 if safe_timeout >= 5.0 else 1
+        for attempt in range(journal_attempts):
             try:
                 conn.execute("PRAGMA journal_mode=WAL")
                 break
             except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower() or attempt >= 5:
+                if "locked" not in str(exc).lower() or attempt >= journal_attempts - 1:
                     raise
                 time.sleep(0.1 * (attempt + 1))
         synchronous = str(
@@ -1282,6 +1307,12 @@ def _bootstrap_schema(cur) -> None:
     _migrate_ad_break_items(cur)
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_queue_station_status_pos ON queue_items(station_id, status, position)"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_active_dedupe "
+        "ON queue_items(station_id, dedupe_key) "
+        "WHERE status IN ('pending', 'playing') "
+        "AND dedupe_key IS NOT NULL AND TRIM(dedupe_key) <> ''"
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_schedule_station_status_play_at ON schedule_items(station_id, status, play_at)"

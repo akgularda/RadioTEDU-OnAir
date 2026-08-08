@@ -7,6 +7,11 @@ from app.dependency_bootstrap import managed_binary_path, read_bootstrap_state
 from app.db import database_health_snapshot, get_connection, init_db
 from app.repositories.settings_repo import SettingsRepository
 from app.repositories.station_repo import StationRepository
+from app.runtime_identity import (
+    BACKEND_INSTANCE_ID,
+    BACKEND_PROCESS_ID,
+    BACKEND_STARTED_AT_EPOCH,
+)
 from app.runtime_paths import resolve_binary_details
 
 router = APIRouter()
@@ -18,6 +23,8 @@ def liveness():
         "status": "ok",
         "state": "operational",
         "service": "radiotedu-onair",
+        "backend_instance_id": BACKEND_INSTANCE_ID,
+        "backend_process_id": BACKEND_PROCESS_ID,
     }
 
 
@@ -43,6 +50,8 @@ def readiness():
         "database": database,
         "high_availability": ha,
         "broadcast_safe": bool(ha.get("safe_to_broadcast")),
+        "backend_instance_id": BACKEND_INSTANCE_ID,
+        "backend_process_id": BACKEND_PROCESS_ID,
     }
     return JSONResponse(payload, status_code=200 if ready else 503)
 
@@ -117,12 +126,22 @@ def health(station_id: int | None = None):
     worker_loop_status = worker_loop_manager.status(sid)
     engine_running = bool(runtime_status.get("running"))
     settings = SettingsRepository(conn).get_station(sid)
+    ai_enabled = str(settings.get("ai_host_enabled", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     try:
-        from app.services.ai_prefetch import get_ai_prefetch
+        if not ai_enabled:
+            ai_prefetch_stats = {"state": "disabled"}
+            ai_prefetch_readiness = {"state": "disabled"}
+        else:
+            from app.services.ai_prefetch import get_ai_prefetch
 
-        ai_prefetch = get_ai_prefetch()
-        ai_prefetch_stats = ai_prefetch.get_stats(sid)
-        ai_prefetch_readiness = ai_prefetch.readiness_snapshot(sid)
+            ai_prefetch = get_ai_prefetch()
+            ai_prefetch_stats = ai_prefetch.get_stats(sid)
+            ai_prefetch_readiness = ai_prefetch.readiness_snapshot(sid)
     except Exception:
         ai_prefetch_stats = {}
         ai_prefetch_readiness = {}
@@ -151,10 +170,21 @@ def health(station_id: int | None = None):
     from app.services.audit_chain import audit_chain
     from app.services.ha_coordinator import ha_coordinator
 
+    public_runtime_status = dict(runtime_status)
+    public_runtime_status.pop("active_input_uri", None)
+    public_runtime_registry = []
+    for item in runtime_registry.snapshot():
+        public_item = dict(item)
+        public_item.pop("active_input_uri", None)
+        public_runtime_registry.append(public_item)
+
     payload = {
         "status": "ok" if bool(database.get("healthy")) else "degraded",
         "overall_state": str(database.get("state") or "unknown"),
         "database": database,
+        "backend_instance_id": BACKEND_INSTANCE_ID,
+        "backend_process_id": BACKEND_PROCESS_ID,
+        "backend_started_at_epoch": BACKEND_STARTED_AT_EPOCH,
         "station_id": sid,
         "station_name": station_name,
         "active_station_id": active_station_id,
@@ -163,7 +193,7 @@ def health(station_id: int | None = None):
         "tracks_in_library": tracks_in_library,
         "engine_running": engine_running,
         "runtime_branch_health": runtime_status.get("branch_health", {}),
-        "runtime": runtime_status,
+        "runtime": public_runtime_status,
         "worker_loop": worker_loop_status,
         "ai_prefetch": {
             "stats": ai_prefetch_stats,
@@ -172,7 +202,7 @@ def health(station_id: int | None = None):
             "runtime": ai_runtime_status,
         },
         "setup_dependencies": dependency_state,
-        "runtime_registry": runtime_registry.snapshot(),
+        "runtime_registry": public_runtime_registry,
         "worker_loops": worker_loop_manager.snapshot(),
         "high_availability": ha_coordinator.snapshot(),
         "audit_chain": audit_chain.verify(),

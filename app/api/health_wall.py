@@ -7,7 +7,11 @@ import math
 from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Request
 
-from app.api.public import _public_active_show_name, _public_now_playing
+from app.api.public import (
+    _public_active_show_name,
+    _public_now_playing,
+    list_public_station_summaries,
+)
 from app.api.runtime import _runtime_status_payload
 from app.audio.live_mic_registry import live_mic_registry
 from app.audio.microphone_readiness import physical_microphone_readiness
@@ -175,17 +179,36 @@ def _safe_snapshot(factory, sanitizer):
 
 def _collect_fast() -> dict:
     init_db()
+    try:
+        public_by_id = {
+            int(item["id"]): item
+            for item in list_public_station_summaries().get("stations", [])
+        }
+    except Exception:
+        public_by_id = {}
     conn = get_connection()
     try:
         stations = []
         for row in StationRepository(conn).list_all():
             station_id = int(row["id"])
             runtime = dict(_runtime_status_payload(station_id))
+            public_station = public_by_id.get(station_id)
+            public_status = str((public_station or {}).get("status") or "offline")
+            reported_item = _public_now_playing(conn, station_id)
             stations.append({
                 "station_id": station_id,
                 "name": str(row["name"]),
-                "health": _runtime_health(runtime),
-                "now_playing": _public_now_playing(conn, station_id),
+                "health": {
+                    "live": "healthy",
+                    "degraded": "degraded",
+                    "offline": "unavailable",
+                }.get(public_status, _runtime_health(runtime)),
+                "now_playing": (public_station or {}).get("now_playing"),
+                "preserved_item": (
+                    (public_station or {}).get("preserved_item")
+                    if public_station is not None
+                    else reported_item
+                ),
                 "active_show_name": _public_active_show_name(conn, station_id),
                 "runtime": _safe_runtime(runtime),
                 "microphones": _safe_microphone(station_id),

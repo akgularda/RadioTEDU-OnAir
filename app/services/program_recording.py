@@ -32,7 +32,11 @@ class _Recorder:
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0", "-c:a", "flac", "-y", str(path)],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            # No reader owns stderr.  A PIPE can fill and freeze FFmpeg while
+            # the recorder still looks alive, eventually applying pressure to
+            # the broadcast PCM fan-out.  Recording health is tracked through
+            # process state and the bounded input queue instead.
+            stderr=subprocess.DEVNULL,
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
         self._thread = threading.Thread(target=self._write_loop, name=f"onair-recorder-{path.stem}", daemon=True)
@@ -77,6 +81,11 @@ class _Recorder:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.terminate()
+                try:
+                    self._process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait(timeout=2)
         return {"path": str(self.path), "failed": self._failed, "returncode": self._process.poll()}
 
 

@@ -40,7 +40,7 @@ def test_reconcile_stale_playing_marks_failed(tmp_path, monkeypatch):
     svc.reconcile_startup(station_id=1)
     cur = conn.cursor()
     cur.execute("SELECT status FROM queue_items WHERE id=?", (item_id,))
-    assert cur.fetchone()["status"] == "failed"
+    assert cur.fetchone()["status"] == "pending"
 
 
 def test_reconcile_all_startup_resets_all_playing_sources(tmp_path, monkeypatch):
@@ -67,17 +67,17 @@ def test_reconcile_all_startup_resets_all_playing_sources(tmp_path, monkeypatch)
     conn.commit()
 
     summary = reconcile_all_startup(conn)
-    assert summary["queue_failed"] >= 1
-    assert summary["ad_failed"] >= 1
-    assert summary["schedule_failed"] >= 1
+    assert summary["queue_requeued"] >= 1
+    assert summary["ad_requeued"] >= 1
+    assert summary["schedule_requeued"] >= 1
     assert summary["playout_reset"] >= 1
 
     cur.execute("SELECT status FROM queue_items WHERE id=?", (queue_item_id,))
-    assert cur.fetchone()["status"] == "failed"
+    assert cur.fetchone()["status"] == "pending"
     cur.execute("SELECT status FROM ad_break_items WHERE id=?", (ad_id,))
-    assert cur.fetchone()["status"] == "failed"
+    assert cur.fetchone()["status"] == "pending"
     cur.execute("SELECT status FROM schedule_items WHERE id=?", (schedule_id,))
-    assert cur.fetchone()["status"] == "failed"
+    assert cur.fetchone()["status"] == "pending"
     cur.execute("SELECT current_source, current_item_id FROM playout_state WHERE station_id=1")
     row = cur.fetchone()
     assert row["current_source"] == "none"
@@ -135,7 +135,7 @@ def test_reconcile_all_startup_backfills_missing_track_durations(tmp_path, monke
 
     monkeypatch.setattr(
         "app.engine.playout_state.audio_processing.probe_duration",
-        lambda file_path: 284.25 if str(file_path) == str(audio_file) else 0.0,
+        lambda file_path, **_kwargs: 284.25 if str(file_path) == str(audio_file) else 0.0,
     )
 
     summary = reconcile_all_startup(conn)

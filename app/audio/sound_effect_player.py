@@ -13,6 +13,10 @@ logger = logging.getLogger("cleanroom.soundboard")
 PCM_SAMPLE_RATE = 48000
 PCM_CHANNELS = 1
 PCM_CHUNK_BYTES = 4096
+PCM_MAX_BUFFER_SECONDS = 5
+PCM_MAX_BUFFER_BYTES = (
+    PCM_SAMPLE_RATE * PCM_CHANNELS * 2 * PCM_MAX_BUFFER_SECONDS
+)
 
 
 class SoundEffectSlot:
@@ -52,7 +56,18 @@ class SoundEffectSlot:
             return
         try:
             while not self._finished:
-                chunk = proc.stdout.read(PCM_CHUNK_BYTES)
+                with self._lock:
+                    buffer_room = max(
+                        0,
+                        PCM_MAX_BUFFER_BYTES - self._buffer_bytes,
+                    )
+                if buffer_room <= 0:
+                    # Let the FFmpeg stdout pipe provide natural backpressure.
+                    # Without this cap a long effect is decoded as fast as the
+                    # CPU allows and retained entirely in RAM.
+                    time.sleep(0.01)
+                    continue
+                chunk = proc.stdout.read(min(PCM_CHUNK_BYTES, buffer_room))
                 if not chunk:
                     if proc.poll() is not None:
                         break

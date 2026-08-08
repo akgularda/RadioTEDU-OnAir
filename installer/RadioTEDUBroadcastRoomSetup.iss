@@ -79,11 +79,11 @@ Name: "{commonappdata}\RadioTEDU\OnAir\Logs\ServiceHost"; Flags: uninsneverunins
 Name: "{commonappdata}\RadioTEDU\OnAir\State\ServiceHost"; Flags: uninsneveruninstall
 
 [Icons]
-Name: "{autodesktop}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{autoprograms}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: startmenuicon
-Name: "{commonstartup}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; Tasks: autostart
-Name: "{autodesktop}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; Tasks: healthwallshortcut
-Name: "{autoprograms}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; Tasks: healthwallshortcut
+Name: "{autodesktop}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; IconFilename: "{app}\RadioTEDU-OnAir-Agent.exe"; IconIndex: 0; Tasks: desktopicon
+Name: "{autoprograms}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; IconFilename: "{app}\RadioTEDU-OnAir-Agent.exe"; IconIndex: 0; Tasks: startmenuicon
+Name: "{commonstartup}\RadioTEDU OnAir"; Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; WorkingDir: "{app}"; IconFilename: "{app}\RadioTEDU-OnAir-Agent.exe"; IconIndex: 0; Tasks: autostart
+Name: "{autodesktop}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; IconFilename: "{app}\shell\RadioTEDU-OnAir.exe"; IconIndex: 0; Tasks: healthwallshortcut
+Name: "{autoprograms}\RadioTEDU Health Wall"; Filename: "{app}\shell\RadioTEDU-OnAir.exe"; Parameters: "--health-wall"; WorkingDir: "{app}"; IconFilename: "{app}\shell\RadioTEDU-OnAir.exe"; IconIndex: 0; Tasks: healthwallshortcut
 
 [Run]
 Filename: "{app}\RadioTEDU-OnAir-Agent.exe"; Description: "Launch RadioTEDU OnAir"; Flags: nowait postinstall skipifsilent; Tasks: launch

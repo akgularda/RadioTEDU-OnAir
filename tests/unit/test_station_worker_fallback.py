@@ -25,6 +25,7 @@ class _FakeRuntimeRegistry:
         stream_artist: str = "",
         track_type: str = "music",
         crossfade_seconds: float | None = None,
+        start_offset_seconds: float = 0.0,
     ):
         sid = int(station_id)
         self.started.append(
@@ -35,6 +36,7 @@ class _FakeRuntimeRegistry:
                 "stream_artist": str(stream_artist or ""),
                 "track_type": str(track_type or "music"),
                 "crossfade_seconds": float(crossfade_seconds or 0.0),
+                "start_offset_seconds": float(start_offset_seconds or 0.0),
             }
         )
         self.running[sid] = True
@@ -73,6 +75,50 @@ def test_worker_uses_fallback_when_no_other_source():
     assert source == "fallback"
 
 
+def test_startup_sound_does_not_duplicate_preserved_front_jingle(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLEANROOM_DB_PATH", str(tmp_path / "cleanroom.db"))
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO tracks (station_id, title, track_type, file_path, is_active) "
+        "VALUES (1, 'RadioTEDU Sweeper', 'jingle', 'C:/jingles/radiotedu.mp3', 1)"
+    )
+    jingle_track_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO queue_items "
+        "(station_id, track_id, position, status, dedupe_key) "
+        "VALUES (1, ?, 1, 'pending', 'jingle:preserved-front')",
+        (jingle_track_id,),
+    )
+    SettingsRepository(conn).upsert_station(
+        1,
+        {
+            "_startup_sound_pending": "true",
+            "startup_sound_enabled": "true",
+            "startup_sound_mode": "specific",
+            "startup_sound_track_id": str(jingle_track_id),
+        },
+    )
+    conn.commit()
+
+    worker = StationWorker(station_id=1, runtime_registry=_FakeRuntimeRegistry())
+
+    assert worker._maybe_insert_startup_sound() is False
+    rows = conn.execute(
+        "SELECT track_id, status FROM queue_items "
+        "WHERE station_id=1 AND status IN ('pending','playing') "
+        "ORDER BY position,id"
+    ).fetchall()
+    assert [(int(row["track_id"]), str(row["status"])) for row in rows] == [
+        (jingle_track_id, "pending")
+    ]
+    settings = SettingsRepository(conn).get_station(1)
+    assert settings["_startup_sound_pending"] == "false"
+
+
 def test_worker_process_once_autofills_empty_queue_and_starts_first_track(
     tmp_path, monkeypatch
 ):
@@ -108,6 +154,7 @@ def test_worker_process_once_autofills_empty_queue_and_starts_first_track(
             "stream_artist": "Artist A",
             "track_type": "music",
             "crossfade_seconds": 3.0,
+            "start_offset_seconds": 0.0,
         }
     ]
     rows = conn.cursor().execute(
@@ -733,7 +780,7 @@ def test_worker_autofill_backfills_zero_duration_track_before_queueing(
     )
     monkeypatch.setattr(
         "app.audio.audio_processing.probe_duration",
-        lambda file_path: 321.5 if str(file_path) == str(audio_file) else 0.0,
+        lambda file_path, **_kwargs: 321.5 if str(file_path) == str(audio_file) else 0.0,
     )
 
     worker = StationWorker(station_id=1)
@@ -828,6 +875,7 @@ def test_worker_process_once_prerolls_next_music_track_inside_crossfade_window(
             "stream_artist": "Artist B",
             "track_type": "music",
             "crossfade_seconds": 3.0,
+            "start_offset_seconds": 0.0,
         }
     ]
     rows = conn.cursor().execute(

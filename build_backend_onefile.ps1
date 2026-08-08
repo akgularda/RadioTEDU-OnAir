@@ -112,8 +112,8 @@ if ($versionText -match '^\d+\.\d+$') {
     $parts = $versionText.Split('.')
     $major = [int]$parts[0]
     $minor = [int]$parts[1]
-    if ($major -eq 3 -and $minor -ge 14) {
-        Write-Warning "Building with Python $versionText. Python 3.12 is recommended for stable PyInstaller/Pydantic behavior."
+    if ($major -ne 3 -or $minor -ne 12) {
+        throw "Packaged backend builds require Python 3.12; found $versionText."
     }
 }
 else {
@@ -179,6 +179,34 @@ function Copy-DirectoryContents {
         if (-not $copied) {
             throw "Could not copy build artifact into package: $($_.FullName)"
         }
+    }
+}
+
+function Get-BackendSourceFingerprint {
+    $files = @(
+        Get-ChildItem -LiteralPath (Join-Path $root "app") -Recurse -File |
+            Where-Object {
+                $_.Extension -notin @(".pyc", ".pyo") -and
+                $_.FullName -notmatch '[\\/]__pycache__[\\/]'
+            }
+    ) + @(
+        (Get-Item -LiteralPath (Join-Path $root "run_cleanroom.py"))
+        (Get-Item -LiteralPath (Join-Path $root "requirements.lock"))
+        (Get-Item -LiteralPath (Join-Path $root "build_backend_onefile.ps1"))
+    )
+    $material = New-Object System.Text.StringBuilder
+    foreach ($file in @($files | Sort-Object FullName)) {
+        $relative = $file.FullName.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+        [void]$material.Append($relative).Append(":").Append($hash).Append("`n")
+    }
+    $provider = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($material.ToString())
+        return ([System.BitConverter]::ToString($provider.ComputeHash($bytes))).Replace("-", "")
+    }
+    finally {
+        $provider.Dispose()
     }
 }
 
@@ -335,7 +363,10 @@ function Ensure-LocalPyInstaller {
     $localSite = Join-Path $root "build\python-packages"
     Add-LocalPythonPath -Path $localSite
 
-    if ((Get-PyInstallerVersion) -eq $Version) {
+    if (
+        (Test-Path (Join-Path $localSite "PyInstaller\__init__.py") -PathType Leaf) `
+        -and (Get-PyInstallerVersion) -eq $Version
+    ) {
         Write-Output "Using repo-local PyInstaller $Version"
         return
     }
@@ -353,7 +384,7 @@ function Ensure-LocalPyInstaller {
     Install-PyPiWheelToTarget -Package "altgraph" -Version "0.17.5" -TargetDir $localSite
     Install-PyPiWheelToTarget -Package "pefile" -Version "2024.8.26" -TargetDir $localSite
     Install-PyPiWheelToTarget -Package "pywin32-ctypes" -Version "0.2.3" -TargetDir $localSite
-    Install-PyPiWheelToTarget -Package "pyinstaller-hooks-contrib" -TargetDir $localSite
+    Install-PyPiWheelToTarget -Package "pyinstaller-hooks-contrib" -Version "2026.6" -TargetDir $localSite
 
     Add-LocalPythonPath -Path $localSite
     $installedVersion = Get-PyInstallerVersion
@@ -378,17 +409,61 @@ if (-not $ffprobe) {
     throw "ffprobe not found in PATH. Install or add ffprobe.exe to PATH before build."
 }
 
-$requiredPyInstaller = "6.19.0"
-if ((Get-PyInstallerVersion) -ne $requiredPyInstaller) {
-    Ensure-LocalPyInstaller -Version $requiredPyInstaller
+$lockedRequirements = Join-Path $root "requirements.lock"
+if (-not (Test-Path $lockedRequirements -PathType Leaf)) {
+    throw "Locked Python requirements file not found: $lockedRequirements"
 }
-else {
-    Write-Output "Using PyInstaller $requiredPyInstaller"
+$sourceFingerprintBefore = Get-BackendSourceFingerprint
+$buildVenv = Join-Path $root ".tmp\backend-build-venv"
+if (-not (Remove-PathWithRetry -Path $buildVenv)) {
+    throw "Could not clean isolated Python build environment: $buildVenv"
 }
+$bootstrapPythonCommand = $pythonCommand
+$bootstrapPythonPrefixArgs = @($pythonPrefixArgs)
+Write-Output "Creating isolated Python 3.12 build environment: $buildVenv"
+& $bootstrapPythonCommand @bootstrapPythonPrefixArgs -m venv $buildVenv
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not create isolated Python build environment."
+}
+$venvPythonCandidates = @(
+    (Join-Path $buildVenv "Scripts\python.exe"),
+    (Join-Path $buildVenv "Scripts\python.cmd")
+)
+$venvPython = $venvPythonCandidates | Where-Object {
+    Test-Path $_ -PathType Leaf
+} | Select-Object -First 1
+if (-not $venvPython) {
+    throw "Isolated Python executable was not created under $buildVenv."
+}
+$pythonCommand = $venvPython
+$pythonPrefixArgs = @()
+# A caller-provided PYTHONPATH would defeat virtual-environment isolation and
+# let globally installed optional/AI packages affect PyInstaller analysis.
+$env:PYTHONPATH = ""
 
-# Keep runtime data available inside packaged backend builds for cross-machine consistency.
-Ensure-PythonPackageInstalled -ImportName "tzdata" -InstallSpec "tzdata"
-Ensure-PythonPackageInstalled -ImportName "python_multipart" -InstallSpec "python-multipart"
+$requiredPyInstaller = "6.19.0"
+Write-Output "Installing deterministic Python build and runtime lock into $buildVenv"
+& $pythonCommand @pythonPrefixArgs -m pip install `
+    --disable-pip-version-check `
+    --only-binary=:all: `
+    --upgrade `
+    -r $lockedRequirements `
+    "pyinstaller==$requiredPyInstaller" `
+    "pyinstaller-hooks-contrib==2026.6" `
+    "altgraph==0.17.5" `
+    "pefile==2024.8.26" `
+    "pywin32-ctypes==0.2.3" `
+    "setuptools==80.9.0" | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Locked Python build dependency installation failed."
+}
+& $pythonCommand @pythonPrefixArgs -m pip check | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Locked Python dependency graph is inconsistent."
+}
+if ((Get-PyInstallerVersion) -ne $requiredPyInstaller) {
+    throw "Isolated PyInstaller validation failed after locked install."
+}
 
 $distDir = ".\dist\backend"
 if (-not (Remove-PathWithRetry -Path $distDir)) {
@@ -434,6 +509,8 @@ foreach ($buildPath in @($pyInstallerDistRoot, $pyInstallerWorkRoot)) {
     }
 }
 
+$priorErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $pythonCommand @pythonPrefixArgs -m PyInstaller `
     --noconfirm `
     --clean `
@@ -465,16 +542,38 @@ foreach ($buildPath in @($pyInstallerDistRoot, $pyInstallerWorkRoot)) {
     --exclude-module "pandas" `
     --exclude-module "onnxruntime" `
     --exclude-module "tensorflow" `
-    ".\\run_cleanroom.py" | Out-Host
+    ".\\run_cleanroom.py" 2>&1 | Out-Host
+$pyInstallerExitCode = $LASTEXITCODE
+$ErrorActionPreference = $priorErrorActionPreference
 
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed with exit code $LASTEXITCODE."
+if ($pyInstallerExitCode -ne 0) {
+    throw "PyInstaller failed with exit code $pyInstallerExitCode."
+}
+
+$sourceFingerprintAfter = Get-BackendSourceFingerprint
+if ($sourceFingerprintAfter -ne $sourceFingerprintBefore) {
+    throw "Backend source changed during packaging. Discard this artifact and rebuild from a stable tree."
 }
 
 $stagedOut = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $root $pyInstallerDistRoot) $BackendExeName))
 if (-not (Test-Path $stagedOut -PathType Container)) {
     throw "Expected staged backend bundle was not produced at $stagedOut."
 }
+
+$pythonBuildVersion = (& $pythonCommand @pythonPrefixArgs -c "import platform; print(platform.python_version())").Trim()
+$provenance = [ordered]@{
+    schema_version = 1
+    source_sha256 = $sourceFingerprintAfter
+    dependency_lock_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $lockedRequirements).Hash
+    python_version = $pythonBuildVersion
+    pyinstaller_version = $requiredPyInstaller
+    ffmpeg_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ffmpeg.Source).Hash
+    ffplay_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ffplay.Source).Hash
+    ffprobe_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ffprobe.Source).Hash
+}
+$provenance | ConvertTo-Json | Set-Content `
+    -LiteralPath (Join-Path $stagedOut "build-provenance.json") `
+    -Encoding UTF8
 
 $distOut = [System.IO.Path]::GetFullPath((Join-Path $root $distDir))
 Copy-DirectoryContents -Source $stagedOut -Destination $distOut

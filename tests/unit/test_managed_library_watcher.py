@@ -75,3 +75,28 @@ def test_watcher_detects_changed_audio_and_uses_bounded_retry(tmp_path):
     media.write_bytes(b"changed")
     watcher.poll_once(now=11)
     assert watcher.snapshot()["profiles"][0]["status"] == "settling"
+
+
+def test_watcher_periodically_rescans_stable_library(tmp_path):
+    folder = tmp_path / "Lofi"
+    folder.mkdir()
+    (folder / "track.mp3").write_bytes(b"audio")
+    calls = []
+    profile = ManagedLibraryProfile(
+        station_id=2,
+        track_type="music",
+        folder=str(folder),
+        rescan_interval_seconds=600,
+    )
+    watcher = ManagedLibraryWatcher(
+        profile_provider=lambda: [profile],
+        sync_callback=lambda item: calls.append(item) or {"verified": True},
+        required_stable_polls=2,
+    )
+
+    watcher.poll_once(now=1)
+    watcher.poll_once(now=2)
+    assert len(calls) == 1
+
+    watcher.poll_once(now=602)
+    assert len(calls) == 2

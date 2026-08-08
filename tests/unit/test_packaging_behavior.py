@@ -93,6 +93,10 @@ def test_build_backend_onefile_fails_when_pyinstaller_reports_success_without_ex
     script_root.mkdir()
 
     shutil.copy2(root / "build_backend_onefile.ps1", script_root / "build_backend_onefile.ps1")
+    shutil.copy2(root / "requirements.lock", script_root / "requirements.lock")
+    (script_root / "app").mkdir()
+    (script_root / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (script_root / "run_cleanroom.py").write_text("", encoding="utf-8")
 
     tools_dir = script_root / "tools"
     tools_dir.mkdir()
@@ -121,6 +125,15 @@ if ($Args.Count -ge 2 -and $Args[0] -eq '-c') {
 
 if ($Args.Count -ge 3 -and $Args[0] -eq '-m' -and $Args[1] -eq 'PyInstaller' -and $Args[2] -eq '--version') {
     Write-Output '6.19.0'
+    exit 0
+}
+
+if ($Args.Count -ge 3 -and $Args[0] -eq '-m' -and $Args[1] -eq 'venv') {
+    $venvRoot = $Args[$Args.Count - 1]
+    $scripts = Join-Path $venvRoot 'Scripts'
+    New-Item -ItemType Directory -Force -Path $scripts | Out-Null
+    $wrapper = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" %*`r`n"
+    Set-Content -LiteralPath (Join-Path $scripts 'python.cmd') -Value $wrapper -Encoding ASCII
     exit 0
 }
 
@@ -165,9 +178,10 @@ if ($Args.Count -ge 2 -and $Args[0] -eq '-m' -and $Args[1] -eq 'PyInstaller') {
 def test_build_backend_onefile_includes_passlib_bcrypt_hidden_import():
     root = Path(__file__).resolve().parents[2]
     backend_script = (root / "build_backend_onefile.ps1").read_text(encoding="utf-8")
+    dependency_lock = (root / "requirements.lock").read_text(encoding="utf-8")
 
     assert "passlib.handlers.bcrypt" in backend_script
-    assert "python-multipart" in backend_script
+    assert "python-multipart==" in dependency_lock
     assert "--onedir" in backend_script
     assert "--onefile" not in backend_script
     assert "--console" in backend_script

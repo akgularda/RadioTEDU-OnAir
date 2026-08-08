@@ -6,7 +6,23 @@ from app.main import app
 from app.repositories.station_repo import StationRepository
 
 
-def test_health_endpoint_reports_ok():
+def test_health_endpoint_reports_ok(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.health.database_health_snapshot",
+        lambda: {
+            "state": "healthy",
+            "healthy": True,
+            "integrity": "ok",
+            "journal_mode": "wal",
+            "synchronous": "full",
+            "foreign_keys": True,
+            "database_bytes": 1024,
+            "wal_bytes": 0,
+            "allocated_bytes": 1024,
+            "disk_free_bytes": 10 * 1024**3,
+            "disk_free_percent": 50.0,
+        },
+    )
     client = TestClient(app)
     res = client.get("/api/health")
     assert res.status_code == 200
@@ -15,12 +31,37 @@ def test_health_endpoint_reports_ok():
     assert "engine_running" in payload
     assert isinstance(payload["engine_running"], bool)
     assert isinstance(payload.get("runtime_branch_health"), dict)
+    assert "active_input_uri" not in payload["runtime"]
+    assert all(
+        "active_input_uri" not in item
+        for item in payload.get("runtime_registry", [])
+    )
+    assert payload["backend_instance_id"]
+    assert isinstance(payload["backend_process_id"], int)
     deps = payload.get("dependencies") or {}
     assert isinstance(deps, dict)
     for key in ("ffmpeg", "ffplay", "ffprobe", "gst_launch", "yt_dlp"):
         item = deps.get(key) or {}
         assert isinstance(item.get("found"), bool)
         assert isinstance(item.get("path"), str)
+
+
+def test_health_does_not_create_ai_prefetch_when_ai_is_disabled(monkeypatch):
+    called = {"prefetch": 0}
+
+    def _unexpected_prefetch():
+        called["prefetch"] += 1
+        raise AssertionError("disabled AI must not create the prefetch service")
+
+    monkeypatch.setattr(
+        "app.services.ai_prefetch.get_ai_prefetch",
+        _unexpected_prefetch,
+    )
+    client = TestClient(app)
+    payload = client.get("/api/health").json()
+
+    assert payload["ai_prefetch"]["stats"]["state"] == "disabled"
+    assert called["prefetch"] == 0
 
 
 def test_health_endpoint_reports_dependency_source_and_bootstrap_status(monkeypatch):

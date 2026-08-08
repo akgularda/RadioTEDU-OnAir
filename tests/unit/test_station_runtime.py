@@ -1,3 +1,6 @@
+import time
+import threading
+
 import app.audio.station_runtime as runtime_module
 from app.audio.gst_pipeline import StationPipelineConfig
 from app.audio.station_runtime import StationRuntime
@@ -72,6 +75,20 @@ class _FakeLiveMicRegistry:
         return chunk
 
 
+class _HealthySink:
+    stdin = _FakePipe()
+
+    def is_running(self):
+        return True
+
+    def health_snapshot(self):
+        return {
+            "process_running": True,
+            "mount_healthy": True,
+            "consecutive_probe_failures": 0,
+        }
+
+
 def _make_gst_missing_factory():
     launched = []
     ffmpeg_procs = []
@@ -125,6 +142,7 @@ def test_runtime_start_stop_and_branch_health():
     cfg = _make_cfg()
     runtime.start(cfg)
     assert runtime.is_running() is True
+    assert runtime.status()["active_input_uri"] == cfg.input_uri
     assert launched
     assert launched[0][0] == "gst-launch-1.0"
     assert "-e" in launched[0]
@@ -140,6 +158,68 @@ def test_runtime_start_stop_and_branch_health():
     health_after_stop = runtime.branch_health()
     assert health_after_stop["icecast"] is False
     assert health_after_stop["local"] is False
+
+
+def test_runtime_does_not_report_silence_floor_as_live_program_audio():
+    runtime = StationRuntime(process_factory=lambda _cmd: _FakeProcess())
+    runtime._backend = "ffmpeg"
+    runtime._process = _FakeProcess()
+    runtime._icecast_sink = _HealthySink()
+    runtime._router.set_branch_health("icecast", True)
+    runtime._last_program_pcm_monotonic = (
+        time.monotonic() - runtime_module._PROGRAM_PCM_STALL_SECONDS - 1.0
+    )
+
+    status = runtime.status()
+
+    assert status["program_running"] is True
+    assert status["program_pcm_stalled"] is True
+    assert status["output_feed_active"] is False
+    assert status["branch_health"]["icecast"] is False
+
+
+def test_runtime_tracks_decode_progress_when_remote_sink_is_unhealthy():
+    runtime = StationRuntime(process_factory=lambda _cmd: _FakeProcess())
+
+    class RepeatingPipe:
+        def read(self, _size=-1):
+            return b"\x01\x00" * 128
+
+        def close(self):
+            return None
+
+    class UnhealthySink:
+        stdin = _FakePipe()
+
+        def is_running(self):
+            return False
+
+        def health_snapshot(self):
+            return {
+                "process_running": True,
+                "mount_healthy": False,
+                "consecutive_probe_failures": 3,
+            }
+
+    producer = _FakeProcess()
+    producer.stdout = RepeatingPipe()
+    runtime._backend = "ffmpeg"
+    runtime._process = producer
+    runtime._icecast_sink = UnhealthySink()
+    runtime._last_program_pcm_monotonic = time.monotonic() - 30.0
+
+    worker = threading.Thread(
+        target=runtime._icecast_pipe_loop,
+        args=(producer, runtime._icecast_sink, runtime._playout_generation),
+        daemon=True,
+    )
+    worker.start()
+    time.sleep(0.02)
+    runtime._icecast_pipe_stop.set()
+    worker.join(timeout=1.0)
+
+    assert time.monotonic() - runtime._last_program_pcm_monotonic < 1.0
+    assert runtime.status()["program_pcm_stalled"] is False
 
 
 def test_runtime_falls_back_to_ffmpeg_when_gst_missing():

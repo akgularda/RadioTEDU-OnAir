@@ -12,6 +12,8 @@ from app.config import get_user_config_root
 
 _REFERENCE_PREFIX = "credential://user/"
 _CRYPTPROTECT_UI_FORBIDDEN = 0x01
+_CRYPTPROTECT_LOCAL_MACHINE = 0x04
+_DPAPI_SCOPE_ENV = "CLEANROOM_CREDENTIAL_DPAPI_SCOPE"
 
 
 class CredentialVaultError(RuntimeError):
@@ -34,18 +36,21 @@ def _input_blob(data: bytes) -> tuple[_DataBlob, ctypes.Array]:
     return blob, buffer
 
 
-def _windows_protect(data: bytes) -> bytes:
+def _windows_protect(data: bytes, *, machine_scope: bool = False) -> bytes:
     input_blob, input_buffer = _input_blob(data)
     output_blob = _DataBlob()
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
+    flags = _CRYPTPROTECT_UI_FORBIDDEN
+    if machine_scope:
+        flags |= _CRYPTPROTECT_LOCAL_MACHINE
     ok = crypt32.CryptProtectData(
         ctypes.byref(input_blob),
         "RadioTEDU OnAir credential",
         None,
         None,
         None,
-        _CRYPTPROTECT_UI_FORBIDDEN,
+        flags,
         ctypes.byref(output_blob),
     )
     del input_buffer
@@ -93,6 +98,15 @@ def _default_protect(data: bytes) -> bytes:
     return _windows_protect(data)
 
 
+def _machine_protect(data: bytes) -> bytes:
+    if os.name != "nt":
+        raise CredentialVaultError(
+            "OS credential protection is unavailable on this platform; "
+            "configure a supported credential provider"
+        )
+    return _windows_protect(data, machine_scope=True)
+
+
 def _default_unprotect(data: bytes) -> bytes:
     if os.name != "nt":
         raise CredentialVaultError(
@@ -100,6 +114,38 @@ def _default_unprotect(data: bytes) -> bytes:
             "configure a supported credential provider"
         )
     return _windows_unprotect(data)
+
+
+def credential_protection_scope(path: str | Path) -> str:
+    """Return the DPAPI scope appropriate for a credential store path.
+
+    A ProgramData vault is shared with the LocalSystem continuity service, so
+    its encrypted values must use machine-scoped DPAPI. Vaults elsewhere stay
+    bound to the interactive Windows user. The explicit environment override
+    supports unusual managed deployments without weakening the default.
+    """
+
+    configured = os.getenv(_DPAPI_SCOPE_ENV, "").strip().lower()
+    if configured:
+        if configured not in {"user", "machine"}:
+            raise CredentialVaultError(
+                f"{_DPAPI_SCOPE_ENV} must be either 'user' or 'machine'"
+            )
+        return configured
+
+    program_data = os.getenv("PROGRAMDATA", "").strip()
+    if os.name == "nt" and program_data:
+        candidate = Path(path).expanduser().resolve()
+        shared_root = (
+            Path(program_data).expanduser().resolve() / "RadioTEDU" / "OnAir"
+        ).resolve()
+        try:
+            candidate.relative_to(shared_root)
+        except ValueError:
+            pass
+        else:
+            return "machine"
+    return "user"
 
 
 def credential_reference(station_id: int) -> str:
@@ -121,7 +167,12 @@ def is_credential_reference(value: str) -> bool:
 
 
 class CredentialVault:
-    """Per-user, DPAPI-protected credential storage with atomic updates."""
+    """DPAPI-protected credential storage with atomic updates.
+
+    Per-user vaults use user-scoped DPAPI. The ACL-restricted shared ProgramData
+    vault uses machine-scoped DPAPI so the LocalSystem continuity service and
+    the interactive operator can resolve the same broadcast credential.
+    """
 
     def __init__(
         self,
@@ -144,13 +195,24 @@ class CredentialVault:
                 ).resolve()
             )
         )
-        self._protect = protect or _default_protect
+        self.protection_scope = (
+            "custom" if protect is not None else credential_protection_scope(self.path)
+        )
+        self._protect = (
+            protect
+            if protect is not None
+            else (
+                _machine_protect
+                if self.protection_scope == "machine"
+                else _default_protect
+            )
+        )
         self._unprotect = unprotect or _default_unprotect
         self._lock = threading.RLock()
 
     def _read(self) -> dict:
         if not self.path.exists():
-            return {"version": 1, "credentials": {}}
+            return {"version": 1, "scope": "", "credentials": {}}
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError) as exc:
@@ -162,7 +224,11 @@ class CredentialVault:
         credentials = payload.get("credentials")
         if not isinstance(credentials, dict):
             raise CredentialVaultError("Credential store payload is invalid")
-        return {"version": 1, "credentials": dict(credentials)}
+        return {
+            "version": 1,
+            "scope": str(payload.get("scope") or "").strip().lower(),
+            "credentials": dict(credentials),
+        }
 
     def _write(self, payload: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,6 +265,8 @@ class CredentialVault:
         with self._lock:
             payload = self._read()
             payload["credentials"][normalized_reference] = encoded
+            if self.protection_scope in {"user", "machine"}:
+                payload["scope"] = self.protection_scope
             self._write(payload)
 
     def get_secret(self, reference: str) -> str:
@@ -206,16 +274,27 @@ class CredentialVault:
         if not is_credential_reference(normalized_reference):
             return ""
         with self._lock:
-            encoded = self._read()["credentials"].get(normalized_reference)
-        if not encoded:
-            return ""
-        try:
-            protected = base64.b64decode(str(encoded), validate=True)
-            return self._unprotect(protected).decode("utf-8")
-        except (ValueError, UnicodeError, OSError) as exc:
-            raise CredentialVaultError(
-                f"Credential could not be decrypted: {normalized_reference}"
-            ) from exc
+            payload = self._read()
+            encoded = payload["credentials"].get(normalized_reference)
+            if not encoded:
+                return ""
+            try:
+                protected = base64.b64decode(str(encoded), validate=True)
+                plaintext = self._unprotect(protected)
+                result = plaintext.decode("utf-8")
+                # Older vaults did not record their DPAPI scope. After the
+                # account that owns that legacy blob successfully decrypts it,
+                # migrate the complete vault once to the configured scope.
+                if (
+                    self.protection_scope in {"user", "machine"}
+                    and payload.get("scope") != self.protection_scope
+                ):
+                    self._rewrap_payload(payload)
+                return result
+            except (ValueError, UnicodeError, OSError) as exc:
+                raise CredentialVaultError(
+                    f"Credential could not be decrypted: {normalized_reference}"
+                ) from exc
 
     def has_secret(self, reference: str) -> bool:
         normalized_reference = str(reference or "").strip()
@@ -230,6 +309,32 @@ class CredentialVault:
             payload = self._read()
             if payload["credentials"].pop(normalized_reference, None) is not None:
                 self._write(payload)
+
+    def rewrap_for_configured_scope(self) -> int:
+        """Atomically re-encrypt every entry with this vault's current scope."""
+
+        with self._lock:
+            payload = self._read()
+            return self._rewrap_payload(payload)
+
+    def _rewrap_payload(self, payload: dict) -> int:
+        rewrapped: dict[str, str] = {}
+        for reference, encoded in payload["credentials"].items():
+            try:
+                protected = base64.b64decode(str(encoded), validate=True)
+                plaintext = self._unprotect(protected)
+                rewrapped[str(reference)] = base64.b64encode(
+                    self._protect(plaintext)
+                ).decode("ascii")
+            except (ValueError, UnicodeError, OSError) as exc:
+                raise CredentialVaultError(
+                    f"Credential could not be rewrapped: {reference}"
+                ) from exc
+        payload["credentials"] = rewrapped
+        if self.protection_scope in {"user", "machine"}:
+            payload["scope"] = self.protection_scope
+        self._write(payload)
+        return len(rewrapped)
 
 
 def get_credential_vault() -> CredentialVault:

@@ -84,11 +84,13 @@ def test_database_health_detects_valid_database(tmp_path: Path):
 
 
 def test_liveness_does_not_depend_on_database():
-    assert health_api.liveness() == {
-        "status": "ok",
-        "state": "operational",
-        "service": "radiotedu-onair",
-    }
+    payload = health_api.liveness()
+
+    assert payload["status"] == "ok"
+    assert payload["state"] == "operational"
+    assert payload["service"] == "radiotedu-onair"
+    assert payload["backend_instance_id"]
+    assert int(payload["backend_process_id"]) > 0
 
 
 def test_readiness_returns_503_for_failed_integrity():

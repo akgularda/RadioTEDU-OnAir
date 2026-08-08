@@ -916,6 +916,69 @@ class PlayoutHardeningTests(unittest.TestCase):
         self.assertEqual(worker.queue_repo.done, [])
         self.assertEqual(worker.queue_repo.failed, [])
         self.assertEqual(len(worker.runtime_registry.starts), 1)
+        resume_offset = worker.runtime_registry.starts[0][2]["start_offset_seconds"]
+        self.assertGreater(resume_offset, 4.0)
+        self.assertLess(resume_offset, 7.0)
+
+    def test_jingle_is_not_replayed_when_runtime_has_already_advanced(self):
+        playing = {
+            "id": 12,
+            "track_id": 20391,
+            "started_at": started_seconds_ago(1),
+            "duration": 10.0,
+            "track_type": "jingle",
+        }
+        worker = make_worker(
+            {
+                "running": True,
+                "program_running": True,
+                "active_input_uri": "test://next-song",
+                "branch_health": {"icecast": True},
+                "required_outputs": {"icecast": True},
+            }
+        )
+        worker.queue_repo = FakeQueueRepo(playing=playing, pending={"track_type": "music"})
+        worker._track_runtime_fields = lambda _track_id: (
+            "test://radiotedu-jingle",
+            "RadioTEDU Sweeper",
+            "",
+            "jingle",
+        )
+        worker._complete_queue_item = lambda item: worker.queue_repo.mark_done(item["id"])
+
+        self.assertTrue(worker._advance_playing_queue_item())
+        self.assertEqual(worker.queue_repo.done, [12])
+        self.assertEqual(worker.runtime_registry.starts, [])
+
+    def test_jingle_is_not_replayed_when_runtime_ends_between_polls(self):
+        playing = {
+            "id": 13,
+            "track_id": 20391,
+            "started_at": started_seconds_ago(1),
+            "duration": 10.0,
+            "track_type": "jingle",
+        }
+        worker = make_worker(
+            {
+                "running": False,
+                "program_running": False,
+                "active_input_uri": "",
+                "branch_health": {"icecast": False},
+                "required_outputs": {"icecast": True},
+            }
+        )
+        worker.queue_repo = FakeQueueRepo(playing=playing, pending={"track_type": "music"})
+        worker._track_runtime_fields = lambda _track_id: (
+            "test://radiotedu-jingle",
+            "RadioTEDU Sweeper",
+            "",
+            "jingle",
+        )
+        worker._complete_queue_item = lambda item: worker.queue_repo.mark_done(item["id"])
+
+        self.assertTrue(worker._advance_playing_queue_item())
+        self.assertEqual(worker.queue_repo.done, [13])
+        self.assertEqual(worker.runtime_registry.starts, [])
 
     def test_guard_starts_backend_without_lifespan_startup(self):
         original_popen = playout_guard.subprocess.Popen
@@ -942,8 +1005,69 @@ class PlayoutHardeningTests(unittest.TestCase):
         cmd = calls[0][0]
         env = calls[0][1].get("env") or {}
         self.assertIn("--lifespan", cmd)
-        self.assertEqual(cmd[cmd.index("--lifespan") + 1], "off")
+        self.assertEqual(cmd[cmd.index("--lifespan") + 1], "on")
+        self.assertEqual(env.get("CLEANROOM_SKIP_STARTUP_AI"), "1")
         self.assertEqual(env.get("RADIOTEDU_WEBSOCKET_ENABLED"), "0")
+
+    def test_guard_finds_packaged_backend_by_reserved_listener_port(self):
+        original_platform = playout_guard.sys.platform
+        original_check_output = playout_guard.subprocess.check_output
+        calls = []
+
+        def fake_check_output(cmd, **kwargs):
+            calls.append((list(cmd), dict(kwargs)))
+            return "4321\n"
+
+        try:
+            playout_guard.sys.platform = "win32"
+            playout_guard.subprocess.check_output = fake_check_output
+            self.assertEqual(playout_guard._backend_process_ids(), [4321])
+        finally:
+            playout_guard.sys.platform = original_platform
+            playout_guard.subprocess.check_output = original_check_output
+
+        command = calls[0][0][-1]
+        self.assertIn("Get-NetTCPConnection -LocalPort 8100", command)
+        self.assertIn("OwningProcess", command)
+        self.assertIn("pythonw.exe", command)
+
+    def test_guard_consumes_supervised_reload_and_replaces_backend(self):
+        original_consume = playout_guard.consume_due_reload_request
+        original_stop = playout_guard.stop_backend_processes
+        original_start = playout_guard.start_backend
+        original_log = playout_guard.log
+        calls = []
+        state = {
+            "last_backend_start": 0.0,
+            "backend_starting_since": None,
+            "backend_bad_since": 1.0,
+            "backend_last_status": "healthy",
+            "backend_pid": 100,
+        }
+        try:
+            playout_guard.consume_due_reload_request = lambda token: {
+                "request_id": "reload-1",
+                "backend_instance_id": "old-instance",
+            }
+            playout_guard.stop_backend_processes = lambda: calls.append("stop")
+            playout_guard.start_backend = lambda: calls.append("start") or 4321
+            playout_guard.log = lambda message: calls.append(str(message))
+
+            replaced = playout_guard.process_supervised_reload_request(
+                state,
+                "supervisor-token",
+            )
+        finally:
+            playout_guard.consume_due_reload_request = original_consume
+            playout_guard.stop_backend_processes = original_stop
+            playout_guard.start_backend = original_start
+            playout_guard.log = original_log
+
+        self.assertTrue(replaced)
+        self.assertEqual(calls[0], "backend-reload accepted request_id=reload-1 previous_instance=old-instance")
+        self.assertEqual(calls[1:3], ["stop", "start"])
+        self.assertEqual(state["backend_pid"], 4321)
+        self.assertEqual(state["backend_last_status"], "reloading")
 
     def test_frontend_checks_health_before_websocket_connects(self):
         app_js = self._read_app_js()
@@ -1503,6 +1627,188 @@ class PlayoutHardeningTests(unittest.TestCase):
         self.assertEqual(len(spawned), 1)
         self.assertIs(spawned[0]["stderr"], subprocess.DEVNULL)
 
+    def test_icecast_sink_marks_live_process_unhealthy_when_mount_is_missing(self):
+        proc = FakeProc()
+        cfg = StationPipelineConfig(
+            input_uri="test://song",
+            icecast_host="127.0.0.1",
+            icecast_port=8000,
+            icecast_mount="/lofi",
+            icecast_user="source",
+            icecast_password="secret",
+            local_output_enabled=False,
+            output_device_id="",
+        )
+        sink = IcecastAudioSink(
+            "ffmpeg",
+            lambda _cmd, **_kwargs: proc,
+            mount_probe=lambda _cfg: False,
+            probe_interval_sec=0.01,
+            probe_warmup_sec=0.0,
+            probe_failure_threshold=2,
+        )
+        try:
+            sink.ensure_started(cfg)
+            import time
+
+            deadline = time.monotonic() + 0.5
+            while sink.is_running() and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+            self.assertFalse(sink.is_running())
+            self.assertGreaterEqual(
+                sink.health_snapshot()["consecutive_probe_failures"], 2
+            )
+        finally:
+            sink.stop()
+
+    def test_icecast_sink_keeps_accepting_pcm_while_mount_recovers(self):
+        import time
+
+        class WritablePipe:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, chunk):
+                self.writes.append(bytes(chunk))
+                return len(chunk)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                return None
+
+        proc = FakeProc()
+        proc.stdin = WritablePipe()
+        cfg = StationPipelineConfig(
+            input_uri="test://song",
+            icecast_host="127.0.0.1",
+            icecast_port=8000,
+            icecast_mount="/lofi",
+            icecast_user="source",
+            icecast_password="secret",
+            local_output_enabled=False,
+            output_device_id="",
+        )
+        sink = IcecastAudioSink(
+            "ffmpeg",
+            lambda _cmd, **_kwargs: proc,
+            mount_probe=lambda _cfg: False,
+            probe_interval_sec=0.01,
+            probe_warmup_sec=0.0,
+            probe_failure_threshold=1,
+        )
+        try:
+            sink.ensure_started(cfg)
+            deadline = time.monotonic() + 0.5
+            while sink.is_running() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(sink.is_running())
+            self.assertTrue(sink.accepts_input())
+            self.assertTrue(sink.write_pcm(b"pcm"))
+            deadline = time.monotonic() + 0.5
+            while not proc.stdin.writes and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(proc.stdin.writes, [b"pcm"])
+        finally:
+            sink.stop()
+
+    def test_icecast_sink_preserves_failed_mount_state_across_same_target_recovery(self):
+        import threading
+        import time
+
+        spawned = []
+        calls = {"probe": 0}
+        allow_success = threading.Event()
+
+        def spawn(_cmd, **_kwargs):
+            proc = FakeProc()
+            spawned.append(proc)
+            return proc
+
+        def probe(_cfg):
+            calls["probe"] += 1
+            if calls["probe"] <= 2:
+                return False
+            allow_success.wait(0.5)
+            return allow_success.is_set()
+
+        cfg = StationPipelineConfig(
+            input_uri="test://song",
+            icecast_host="127.0.0.1",
+            icecast_port=8000,
+            icecast_mount="/lofi",
+            icecast_user="source",
+            icecast_password="secret",
+            local_output_enabled=False,
+            output_device_id="",
+        )
+        sink = IcecastAudioSink(
+            "ffmpeg",
+            spawn,
+            mount_probe=probe,
+            probe_interval_sec=0.01,
+            probe_warmup_sec=0.0,
+            probe_failure_threshold=2,
+        )
+        try:
+            sink.ensure_started(cfg)
+            deadline = time.monotonic() + 0.5
+            while sink.is_running() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(sink.is_running())
+            failures_before = sink.health_snapshot()["consecutive_probe_failures"]
+            self.assertGreaterEqual(failures_before, 2)
+
+            sink.ensure_started(cfg)
+            recovery_snapshot = sink.health_snapshot()
+            self.assertIs(recovery_snapshot["mount_healthy"], False)
+            self.assertGreaterEqual(
+                recovery_snapshot["consecutive_probe_failures"],
+                failures_before,
+            )
+            self.assertEqual(len(spawned), 2)
+
+            allow_success.set()
+            deadline = time.monotonic() + 0.5
+            while not sink.is_running() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(sink.is_running())
+            self.assertEqual(
+                sink.health_snapshot()["consecutive_probe_failures"],
+                0,
+            )
+        finally:
+            allow_success.set()
+            sink.stop()
+
+    def test_output_recovery_forwards_resume_offset_to_steady_state(self):
+        runtime = StationRuntime(process_factory=lambda _cmd, **_kwargs: None, station_id=1)
+        cfg = StationPipelineConfig(
+            input_uri="test://song",
+            icecast_host="127.0.0.1",
+            icecast_port=8000,
+            icecast_mount="/lofi",
+            icecast_user="source",
+            icecast_password="secret",
+            local_output_enabled=False,
+            output_device_id="",
+        )
+        observed = []
+        runtime._stop_producers = lambda: None
+        runtime._release_disabled_sinks = lambda _cfg: None
+        runtime._should_use_live_mix = lambda: False
+        runtime._launch_steady_state = (
+            lambda _cfg, _signature, *, start_offset_seconds=0.0: observed.append(
+                float(start_offset_seconds)
+            )
+        )
+
+        runtime._restart_with(cfg, start_offset_seconds=12.5)
+
+        self.assertEqual(observed, [12.5])
+
     def test_supervisor_does_not_stop_icecast_on_degraded_health(self):
         registry = FakeSupervisorRegistry(
             {
@@ -1631,6 +1937,65 @@ class PlayoutHardeningTests(unittest.TestCase):
             playout_guard.station_autostart_enabled = original_autostart
 
         self.assertEqual(calls, [])
+
+    def test_guard_escalates_a_frozen_worker_tick(self):
+        original_api_get = playout_guard.api_get
+        original_ensure_loop = playout_guard.ensure_worker_loop
+        original_autostart = playout_guard.station_autostart_enabled
+        try:
+            loop_payload = {
+                "running": True,
+                "stalled": True,
+                "tick_in_progress": True,
+                "tick_elapsed_seconds": 75.0,
+                "ticks": 8,
+                "runtime": {
+                    "running": True,
+                    "branch_health": {"icecast": True},
+                    "required_outputs": {"icecast": True},
+                },
+            }
+            playout_guard.api_get = lambda _path: dict(loop_payload)
+            playout_guard.ensure_worker_loop = (
+                lambda _station_id, _station_state, payload: dict(payload)
+            )
+            playout_guard.station_autostart_enabled = lambda _station_id: True
+
+            with self.assertRaises(playout_guard.BackendRestartRequired) as raised:
+                playout_guard.supervise_station(2, {})
+
+            self.assertIn("station=2", str(raised.exception))
+            self.assertIn("75.0", str(raised.exception))
+        finally:
+            playout_guard.api_get = original_api_get
+            playout_guard.ensure_worker_loop = original_ensure_loop
+            playout_guard.station_autostart_enabled = original_autostart
+
+    def test_guard_rotates_its_log_before_it_can_grow_without_bound(self):
+        original_path = playout_guard.LOG_PATH
+        original_max = playout_guard.LOG_MAX_BYTES
+        original_backups = playout_guard.LOG_BACKUP_COUNT
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                log_path = Path(td) / "playout_guard.log"
+                log_path.write_text("x" * 32, encoding="utf-8")
+                playout_guard.LOG_PATH = log_path
+                playout_guard.LOG_MAX_BYTES = 16
+                playout_guard.LOG_BACKUP_COUNT = 2
+
+                playout_guard.log("after rotation")
+
+                self.assertIn("after rotation", log_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    log_path.with_name("playout_guard.log.1").read_text(
+                        encoding="utf-8"
+                    ),
+                    "x" * 32,
+                )
+        finally:
+            playout_guard.LOG_PATH = original_path
+            playout_guard.LOG_MAX_BYTES = original_max
+            playout_guard.LOG_BACKUP_COUNT = original_backups
 
     def test_guard_never_restarts_operator_stopped_station(self):
         original_autostart = playout_guard.station_autostart_enabled

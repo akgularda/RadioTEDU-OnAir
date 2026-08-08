@@ -18,7 +18,7 @@ from app.audio.ffmpeg_pipeline import (
     build_ffplay_local_cmd,
 )
 from app.audio.gst_pipeline import StationPipelineConfig, build_gst_pipeline
-from app.audio.icecast_audio_sink import IcecastAudioSink
+from app.audio.icecast_audio_sink import IcecastAudioSink, probe_icecast_mount
 from app.audio.live_audio_mixer import LiveAudioMixer
 from app.audio.local_audio_sink import LocalAudioSink
 from app.audio.output_health_router import OutputHealthRouter
@@ -33,6 +33,7 @@ _SILENCE_FLOOR_AFTER_SECONDS = 1.0
 _SILENCE_FLOOR_INTERVAL_SECONDS = (
     _SILENCE_FLOOR_CHUNK_BYTES / _PCM_BYTES_PER_SECOND
 )
+_PROGRAM_PCM_STALL_SECONDS = 5.0
 _DIRECT_ICECAST_STARTUP_GRACE_SECONDS = 2.0
 _DEFAULT_LIVE_AUDIO_SETTINGS = {
     "program_music_mode": "normal",
@@ -317,6 +318,21 @@ class StationRuntime:
             if not self._generation_is_current(generation):
                 return
             for branch, sink in targets:
+                queued_writer = getattr(sink, "write_pcm", None)
+                if callable(queued_writer):
+                    try:
+                        accepted = bool(queued_writer(chunk))
+                    except Exception:
+                        accepted = False
+                    is_running = getattr(sink, "is_running", None)
+                    healthy = bool(
+                        accepted
+                        and callable(is_running)
+                        and is_running()
+                    )
+                    self._router.set_branch_health(branch, healthy)
+                    wrote_any = wrote_any or accepted
+                    continue
                 stdin = getattr(sink, "stdin", None)
                 is_running = getattr(sink, "is_running", None)
                 if stdin is None or not callable(is_running) or not is_running():
@@ -544,6 +560,9 @@ class StationRuntime:
         self._active_started_monotonic = (
             time.monotonic() if started_monotonic is None else float(started_monotonic)
         )
+        # Each new producer gets a bounded grace window in which to emit its
+        # first decoded PCM, independent of any previous track or recovery.
+        self._last_program_pcm_monotonic = time.monotonic()
 
     def _clear_transition_window(self) -> None:
         self._transition_until_monotonic = None
@@ -643,7 +662,11 @@ class StationRuntime:
         if not cfg.icecast_enabled or not self.ffmpeg_bin:
             return False
         if self._icecast_sink is None:
-            self._icecast_sink = IcecastAudioSink(self.ffmpeg_bin, self._spawn_process)
+            self._icecast_sink = IcecastAudioSink(
+                self.ffmpeg_bin,
+                self._spawn_process,
+                mount_probe=probe_icecast_mount,
+            )
         try:
             self._icecast_sink.ensure_started(cfg)
             self._router.set_branch_health("icecast", True)
@@ -686,23 +709,15 @@ class StationRuntime:
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            # This direct path has no long-lived stderr reader.  Never leave a
+            # broadcast encoder attached to a bounded pipe it can eventually
+            # fill and deadlock on.
+            stderr=subprocess.DEVNULL,
         )
         time.sleep(_DIRECT_ICECAST_STARTUP_GRACE_SECONDS)
         if proc.poll() is None:
             return proc
 
-        stderr_text = ""
-        try:
-            _, stderr_bytes = proc.communicate(timeout=0.5)
-            if stderr_bytes:
-                stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-        except Exception:
-            stderr_text = ""
-        stderr_text = _sanitize_process_text(stderr_text)
-        if stderr_text:
-            _log.warning("Direct Icecast ffmpeg exited during startup: %s", stderr_text[-1200:])
-            raise RuntimeError(f"Icecast source failed during startup: {stderr_text[-500:]}")
         _log.warning("Direct Icecast ffmpeg exited during startup with code %s", proc.returncode)
         raise RuntimeError(f"Icecast source failed during startup with code {proc.returncode}")
 
@@ -812,6 +827,7 @@ class StationRuntime:
                         break
                     time.sleep(0.01)
                     continue
+                self._last_program_pcm_monotonic = time.monotonic()
                 mic_pcm = self._read_live_mic_pcm(len(chunk) // 2)
                 try:
                     from app.audio.guest_audio_registry import guest_audio_registry
@@ -880,6 +896,10 @@ class StationRuntime:
                         break
                     time.sleep(0.01)
                     continue
+                # Decode progress is distinct from remote output health.  The
+                # listener mount may be offline while the program remains
+                # healthy and ready to reconnect.
+                self._last_program_pcm_monotonic = time.monotonic()
                 if not self._generation_is_current(generation):
                     break
                 self._write_pcm_chunk_to_targets(
@@ -986,7 +1006,11 @@ class StationRuntime:
         self._start_live_mix_worker(self._process)
         self._start_silence_floor_worker()
 
-    def _spawn_local_pcm_producer(self, cfg: StationPipelineConfig):
+    def _spawn_local_pcm_producer(
+        self,
+        cfg: StationPipelineConfig,
+        start_offset_seconds: float = 0.0,
+    ):
         if not self._ensure_local_sink(cfg):
             raise FileNotFoundError("ffplay")
         sink_stdin = self._local_sink.stdin if self._local_sink else None
@@ -994,7 +1018,11 @@ class StationRuntime:
             raise FileNotFoundError("ffmpeg")
         if sink_stdin is None:
             raise RuntimeError("sink stdin unavailable")
-        cmd = build_ffmpeg_local_pcm_cmd(cfg, self.ffmpeg_bin)
+        cmd = build_ffmpeg_local_pcm_cmd(
+            cfg,
+            self.ffmpeg_bin,
+            start_offset_seconds=start_offset_seconds,
+        )
         return self._spawn_process(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -1002,7 +1030,11 @@ class StationRuntime:
             stderr=subprocess.DEVNULL,
         )
 
-    def _spawn_icecast_pcm_producer(self, cfg: StationPipelineConfig):
+    def _spawn_icecast_pcm_producer(
+        self,
+        cfg: StationPipelineConfig,
+        start_offset_seconds: float = 0.0,
+    ):
         if not self._ensure_icecast_sink(cfg):
             raise FileNotFoundError("ffmpeg")
         sink_stdin = self._icecast_sink.stdin if self._icecast_sink else None
@@ -1010,7 +1042,11 @@ class StationRuntime:
             raise FileNotFoundError("ffmpeg")
         if sink_stdin is None:
             raise RuntimeError("sink stdin unavailable")
-        cmd = build_ffmpeg_pcm_producer_cmd(cfg, self.ffmpeg_bin)
+        cmd = build_ffmpeg_pcm_producer_cmd(
+            cfg,
+            self.ffmpeg_bin,
+            start_offset_seconds=start_offset_seconds,
+        )
         producer = self._spawn_process(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -1085,14 +1121,23 @@ class StationRuntime:
             self._local_sink.stop()
             self._local_sink = None
 
-    def _launch_steady_state(self, cfg: StationPipelineConfig, target_signature: tuple) -> None:
+    def _launch_steady_state(
+        self,
+        cfg: StationPipelineConfig,
+        target_signature: tuple,
+        *,
+        start_offset_seconds: float = 0.0,
+    ) -> None:
         if not cfg.icecast_enabled and not cfg.local_output_enabled:
             raise ValueError("no output targets enabled")
         if cfg.icecast_enabled and not cfg.local_output_enabled:
             try:
                 if not self._ensure_icecast_sink(cfg):
                     raise FileNotFoundError("ffmpeg")
-                self._process = self._spawn_icecast_pcm_producer(cfg)
+                self._process = self._spawn_icecast_pcm_producer(
+                    cfg,
+                    start_offset_seconds=start_offset_seconds,
+                )
             except Exception:
                 self._process = None
                 self._backend = "none"
@@ -1105,7 +1150,12 @@ class StationRuntime:
             self._backend = "ffmpeg"
             self._router.set_branch_health("icecast", True)
             self._router.set_branch_health("local", False)
-            self._mark_active_request(cfg, target_signature)
+            self._mark_active_request(
+                cfg,
+                target_signature,
+                started_monotonic=time.monotonic()
+                - max(0.0, float(start_offset_seconds or 0.0)),
+            )
             self._start_icecast_pipe_worker(
                 self._process,
                 self._icecast_sink,
@@ -1117,6 +1167,11 @@ class StationRuntime:
         pipeline = build_gst_pipeline(cfg)
         gst_cmd = [self.gst_bin, "-e", pipeline]
         try:
+            # GStreamer startup does not accept an input seek in this runtime.
+            # Recovery must resume deterministically, so use the FFmpeg path
+            # whenever a non-zero offset is requested.
+            if float(start_offset_seconds or 0.0) > 0.0:
+                raise FileNotFoundError("offset resume requires ffmpeg")
             self._process = self._spawn_process(gst_cmd)
             self._backend = "gst"
             self._router.set_branch_health("icecast", bool(cfg.icecast_enabled))
@@ -1135,11 +1190,19 @@ class StationRuntime:
             if not icecast_enabled:
                 raise FileNotFoundError("gst-launch-1.0 or ffmpeg")
 
-            self._process = self._spawn_icecast_pcm_producer(cfg)
+            self._process = self._spawn_icecast_pcm_producer(
+                cfg,
+                start_offset_seconds=start_offset_seconds,
+            )
             self._backend = "ffmpeg"
             self._router.set_branch_health("icecast", True)
             self._router.set_branch_health("local", False)
-            self._mark_active_request(cfg, target_signature)
+            self._mark_active_request(
+                cfg,
+                target_signature,
+                started_monotonic=time.monotonic()
+                - max(0.0, float(start_offset_seconds or 0.0)),
+            )
             self._start_icecast_pipe_worker(
                 self._process,
                 self._icecast_sink,
@@ -1150,7 +1213,10 @@ class StationRuntime:
 
             if local_enabled:
                 try:
-                    self._local_process = self._spawn_local_pcm_producer(cfg)
+                    self._local_process = self._spawn_local_pcm_producer(
+                        cfg,
+                        start_offset_seconds=start_offset_seconds,
+                    )
                     self._router.set_branch_health("local", True)
                 except Exception:
                     self._local_process = None
@@ -1160,11 +1226,19 @@ class StationRuntime:
         # Local-only fallback path when GStreamer is unavailable.
         if not self.ffmpeg_bin or not local_enabled:
             raise FileNotFoundError("gst-launch-1.0 or ffmpeg/ffplay")
-        self._process = self._spawn_local_pcm_producer(cfg)
+        self._process = self._spawn_local_pcm_producer(
+            cfg,
+            start_offset_seconds=start_offset_seconds,
+        )
         self._backend = "ffmpeg-local"
         self._router.set_branch_health("icecast", False)
         self._router.set_branch_health("local", True)
-        self._mark_active_request(cfg, target_signature)
+        self._mark_active_request(
+            cfg,
+            target_signature,
+            started_monotonic=time.monotonic()
+            - max(0.0, float(start_offset_seconds or 0.0)),
+        )
         self._clear_transition_window()
 
     def _restart_with(
@@ -1184,7 +1258,11 @@ class StationRuntime:
                 start_offset_seconds=start_offset_seconds,
             )
             return
-        self._launch_steady_state(cfg, target_signature)
+        self._launch_steady_state(
+            cfg,
+            target_signature,
+            start_offset_seconds=start_offset_seconds,
+        )
 
     def _start_crossfade(self, cfg: StationPipelineConfig) -> None:
         if self._active_cfg is None or not self.ffmpeg_bin:
@@ -1262,13 +1340,24 @@ class StationRuntime:
             self._router.set_branch_health("local", False)
             raise
 
-    def start(self, cfg: StationPipelineConfig) -> None:
+    def start(
+        self,
+        cfg: StationPipelineConfig,
+        *,
+        start_offset_seconds: float = 0.0,
+    ) -> None:
         self._refresh_runtime_bins()
         target_signature = self._signature(cfg)
         live_mix_requested = self._should_use_live_mix()
         if self.is_running():
             if self._active_signature == target_signature:
                 self._active_cfg = cfg
+                if float(start_offset_seconds or 0.0) > 0.0:
+                    self._restart_with(
+                        cfg,
+                        start_offset_seconds=start_offset_seconds,
+                    )
+                    return
                 if live_mix_requested and self._backend != "live-mix":
                     self._restart_with(
                         cfg,
@@ -1278,13 +1367,20 @@ class StationRuntime:
                 self._last_transition_mode = "noop"
                 return
             if live_mix_requested:
-                self._restart_with(cfg)
+                self._restart_with(
+                    cfg,
+                    start_offset_seconds=start_offset_seconds,
+                )
                 return
             if self._backend == "ffmpeg-direct":
-                self._restart_with(cfg)
+                self._restart_with(
+                    cfg,
+                    start_offset_seconds=start_offset_seconds,
+                )
                 return
             if (
                 self._active_cfg
+                and float(start_offset_seconds or 0.0) <= 0.0
                 and self._can_crossfade(self._active_cfg, cfg)
                 and self._transition_backend_supported(cfg)
             ):
@@ -1292,18 +1388,32 @@ class StationRuntime:
                     self._start_crossfade(cfg)
                     return
                 except Exception:
-                    self._restart_with(cfg)
+                    self._restart_with(
+                        cfg,
+                        start_offset_seconds=start_offset_seconds,
+                    )
                     return
-            self._restart_with(cfg)
+            self._restart_with(
+                cfg,
+                start_offset_seconds=start_offset_seconds,
+            )
             return
         if self._process is not None or self._local_process is not None:
             self._stop_producers()
             self._release_disabled_sinks(cfg)
         self._last_transition_mode = "start"
         if live_mix_requested:
-            self._launch_live_mix_state(cfg, target_signature)
+            self._launch_live_mix_state(
+                cfg,
+                target_signature,
+                start_offset_seconds=start_offset_seconds,
+            )
             return
-        self._launch_steady_state(cfg, target_signature)
+        self._launch_steady_state(
+            cfg,
+            target_signature,
+            start_offset_seconds=start_offset_seconds,
+        )
 
     def promote_live_mix(self) -> None:
         if self._backend == "live-mix":
@@ -1352,12 +1462,30 @@ class StationRuntime:
     def _local_sink_running(self) -> bool:
         return bool(self._local_sink and self._local_sink.is_running())
 
+    def _program_pcm_health(self) -> tuple[float, bool]:
+        age = max(
+            0.0,
+            time.monotonic() - float(self._last_program_pcm_monotonic or 0.0),
+        )
+        monitored = self._backend in {
+            "ffmpeg",
+            "live-mix",
+        }
+        stalled = bool(
+            monitored
+            and self._program_running()
+            and age >= _PROGRAM_PCM_STALL_SECONDS
+        )
+        return age, stalled
+
     def _output_feed_active(self) -> bool:
+        _, program_pcm_stalled = self._program_pcm_health()
         if self._backend in {"ffmpeg", "ffmpeg-transition"}:
             return bool(
                 (
                     self._router.is_output_active("icecast")
                     and self._icecast_sink_running()
+                    and not program_pcm_stalled
                 )
                 or (
                     self._router.is_output_active("local")
@@ -1369,6 +1497,7 @@ class StationRuntime:
         if self._backend == "live-mix":
             return bool(
                 self._program_running()
+                and not program_pcm_stalled
                 and (
                     (
                         self._router.is_output_active("icecast")
@@ -1393,15 +1522,26 @@ class StationRuntime:
         local = self._router.is_output_active("local")
         local_sink_running = self._local_sink_running()
         icecast_sink_running = self._icecast_sink_running()
+        _, program_pcm_stalled = self._program_pcm_health()
         if self._backend in {"ffmpeg", "ffmpeg-transition"}:
-            icecast = icecast and icecast_sink_running
+            icecast = icecast and icecast_sink_running and not program_pcm_stalled
             local = local and local_sink_running and self._local_program_running()
         if self._backend == "ffmpeg-local":
             icecast = False
             local = local and self._program_running() and local_sink_running
         if self._backend == "live-mix":
-            icecast = icecast and self._program_running() and icecast_sink_running
-            local = local and self._program_running() and local_sink_running
+            icecast = (
+                icecast
+                and self._program_running()
+                and icecast_sink_running
+                and not program_pcm_stalled
+            )
+            local = (
+                local
+                and self._program_running()
+                and local_sink_running
+                and not program_pcm_stalled
+            )
         if self._backend == "gst":
             local = local and True
         return {
@@ -1414,11 +1554,30 @@ class StationRuntime:
         live_settings = self._live_audio_settings()
         program_running = self._program_running()
         output_feed_active = self._output_feed_active()
+        program_pcm_age, program_pcm_stalled = self._program_pcm_health()
+        icecast_mount_health = (
+            self._icecast_sink.health_snapshot()
+            if self._icecast_sink is not None
+            else {
+                "process_running": False,
+                "mount_healthy": None,
+                "consecutive_probe_failures": 0,
+            }
+        )
         return {
             "running": output_feed_active,
             "program_running": program_running,
+            # Internal consumers use this to prove that the decoder is
+            # rendering the queue-owned item, not merely that some continuity
+            # process is alive. API health responses redact the local path.
+            "active_input_uri": str(
+                self._active_cfg.input_uri if self._active_cfg is not None else ""
+            ),
             "output_feed_active": output_feed_active,
+            "program_pcm_age_seconds": round(program_pcm_age, 3),
+            "program_pcm_stalled": program_pcm_stalled,
             "icecast_sink_running": self._icecast_sink_running(),
+            "icecast_mount_health": icecast_mount_health,
             "local_sink_running": self._local_sink_running(),
             "backend": str(self._backend or "none"),
             "transition_mode": str(self._last_transition_mode or "none"),

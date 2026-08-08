@@ -1,3 +1,6 @@
+import threading
+import time
+
 import app.engine.runtime_registry as runtime_registry_module
 from app.audio.gst_pipeline import StationPipelineConfig
 from app.db import get_connection, init_db
@@ -12,7 +15,7 @@ class _FakeRuntime:
         self.stopped = False
         self.last_cfg = None
 
-    def start(self, cfg):
+    def start(self, cfg, **_kwargs):
         self.started = True
         self.last_cfg = cfg
 
@@ -43,6 +46,43 @@ class _RecoveringRuntime(_FakeRuntime):
             raise RuntimeError("connection refused")
         self.healthy = True
         return {"running": True, "branch_health": self.branch_health()}
+
+
+def test_registry_serializes_operations_for_the_same_station():
+    reg = StationRuntimeRegistry(runtime_factory=lambda: _FakeRuntime())
+    entered = threading.Event()
+    release = threading.Event()
+    state_lock = threading.Lock()
+    active = 0
+    maximum = 0
+
+    def fake_start(**_kwargs):
+        nonlocal active, maximum
+        with state_lock:
+            active += 1
+            maximum = max(maximum, active)
+            entered.set()
+        release.wait(2.0)
+        with state_lock:
+            active -= 1
+        return {"running": True}
+
+    reg._start_station_unlocked = fake_start
+    threads = [
+        threading.Thread(target=reg.start_station, args=(1, "C:/one.mp3")),
+        threading.Thread(target=reg.start_station, args=(1, "C:/two.mp3")),
+    ]
+    threads[0].start()
+    assert entered.wait(0.5)
+    threads[1].start()
+    time.sleep(0.05)
+    assert maximum == 1
+    release.set()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert maximum == 1
 
 
 def test_registry_start_status_stop(tmp_path, monkeypatch):

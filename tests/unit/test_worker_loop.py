@@ -71,6 +71,14 @@ def test_worker_loop_manager_stop_all():
     assert mgr.status(2)["running"] is False
 
 
+def test_failure_backoff_recovers_quickly_before_escalating():
+    assert worker_loop_module._failure_backoff_seconds(1, 1.0) == 1.0
+    assert worker_loop_module._failure_backoff_seconds(2, 1.0) == 2.0
+    assert worker_loop_module._failure_backoff_seconds(3, 1.0) == 5.0
+    assert worker_loop_module._failure_backoff_seconds(6, 1.0) == 60.0
+    assert worker_loop_module._failure_backoff_seconds(20, 1.0) == 60.0
+
+
 def test_worker_loop_manager_updates_running_loop_config():
     mgr = StationWorkerLoopManager(
         runtime_registry=_FakeRuntimeRegistry(),
@@ -105,6 +113,16 @@ def test_worker_loop_stop_never_reports_stopped_while_tick_is_alive(monkeypatch)
     mgr.start(station_id=3, fallback_uri="", interval_sec=0.05)
     assert entered.wait(0.5)
 
+    monkeypatch.setattr(worker_loop_module, "_WORKER_TICK_STALL_SECONDS", 0.01)
+    deadline = time.time() + 0.5
+    status = mgr.status(3)
+    while not status["stalled"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = mgr.status(3)
+    assert status["tick_in_progress"] is True
+    assert status["stalled"] is True
+    assert status["tick_elapsed_seconds"] >= 0.01
+
     stopping = mgr.stop(3)
 
     assert stopping["running"] is True
@@ -114,3 +132,10 @@ def test_worker_loop_stop_never_reports_stopped_while_tick_is_alive(monkeypatch)
     while mgr.status(3)["running"] and time.time() < deadline:
         time.sleep(0.01)
     assert mgr.stop(3)["running"] is False
+
+
+def test_different_managers_use_different_lease_owner_ids():
+    first = StationWorkerLoopManager(runtime_registry=_FakeRuntimeRegistry())
+    second = StationWorkerLoopManager(runtime_registry=_FakeRuntimeRegistry())
+
+    assert first._owner_id != second._owner_id

@@ -1,9 +1,40 @@
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 WALL = ROOT / "app" / "static" / "deterministic-wall"
+
+
+class _OperatorControlParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.form_stack: list[str] = []
+        self.forms: set[str] = set()
+        self.buttons: list[tuple[str, str, str | None, set[str]]] = []
+
+    def handle_starttag(self, tag: str, attrs):
+        attributes = dict(attrs)
+        if tag == "form":
+            form_id = attributes.get("id")
+            if form_id:
+                self.forms.add(form_id)
+                self.form_stack.append(form_id)
+        if tag == "button" and attributes.get("id"):
+            data_attributes = {name for name, _ in attrs if name.startswith("data-")}
+            self.buttons.append(
+                (
+                    attributes["id"],
+                    attributes.get("type", "submit").lower(),
+                    self.form_stack[-1] if self.form_stack else None,
+                    data_attributes,
+                )
+            )
+
+    def handle_endtag(self, tag: str):
+        if tag == "form" and self.form_stack:
+            self.form_stack.pop()
 
 
 def test_operator_wall_exposes_every_self_service_control():
@@ -63,6 +94,12 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "async function startEmergency" in javascript
     assert "async function addTrackToQueue" in javascript
     assert "async function startBroadcast" in javascript
+    assert "let refreshSessionPromise = null" in javascript
+    assert "if (refreshSessionPromise) return refreshSessionPromise" in javascript
+    assert "function isBroadcastVerifiedLive" in javascript
+    assert "isBroadcastVerifiedLive(publicStation)" in javascript
+    assert "publicStation?.preserved_item" in javascript
+    assert "Verified end to end" in javascript
     assert "async function updateBroadcastAutostartFromControl" in javascript
     assert "addEventListener('change', updateBroadcastAutostartFromControl)" in javascript
     assert "async function stopBroadcast" in javascript
@@ -90,3 +127,46 @@ def test_operator_mutations_use_read_back_verification_and_safe_retry():
     assert "if (!state.stationId || (state.busy && !silent)) return;" in javascript
     assert "Stop stream — keep playlist" in html
     assert "AI is content-only" in html
+
+
+def test_every_static_operator_control_has_a_dom_target_and_event_owner():
+    html = (WALL / "index.html").read_text(encoding="utf-8")
+    javascript = (WALL / "app.js").read_text(encoding="utf-8")
+    guest_javascript = (WALL / "guest-room.js").read_text(encoding="utf-8")
+    all_javascript = f"{javascript}\n{guest_javascript}"
+
+    ids = re.findall(r'\bid="([A-Za-z][A-Za-z0-9_-]*)"', html)
+    assert len(ids) == len(set(ids)), "Duplicate HTML ids make button routing nondeterministic"
+    id_set = set(ids)
+
+    referenced_ids = set(re.findall(r"\$\('([^']+)'\)", javascript))
+    referenced_ids.update(re.findall(r"byId\('([^']+)'\)", guest_javascript))
+    assert referenced_ids <= id_set, f"JavaScript references missing DOM ids: {sorted(referenced_ids - id_set)}"
+
+    parser = _OperatorControlParser()
+    parser.feed(html)
+    direct_bindings = set(
+        re.findall(r"(?:\$|byId)\('([^']+)'\)\.addEventListener\(", all_javascript)
+    )
+    submit_bindings = set(
+        re.findall(
+            r"(?:\$|byId)\('([^']+)'\)\.addEventListener\('submit'",
+            all_javascript,
+        )
+    )
+
+    unowned: list[str] = []
+    for button_id, button_type, form_id, data_attributes in parser.buttons:
+        if button_id in direct_bindings:
+            continue
+        if data_attributes and "document.addEventListener('click'" in javascript:
+            continue
+        if button_type == "submit" and form_id in submit_bindings:
+            continue
+        unowned.append(button_id)
+
+    assert not unowned, f"Static buttons without an event owner: {sorted(unowned)}"
+    assert parser.forms <= submit_bindings, (
+        "Forms without deterministic submit handlers: "
+        f"{sorted(parser.forms - submit_bindings)}"
+    )

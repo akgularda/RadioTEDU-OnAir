@@ -167,6 +167,212 @@ def test_stream_apply_rejects_needs_attention(client, monkeypatch):
     assert response.status_code == 409
 
 
+class _RunningStreamRuntime:
+    def __init__(self):
+        self.starts = []
+
+    def status(self, station_id):
+        return {
+            "station_id": station_id,
+            "running": True,
+            "output_feed_active": True,
+            "active_input_uri": "C:/media/current.mp3",
+            "stream_title": "Current",
+            "stream_artist": "Artist",
+            "track_type": "music",
+        }
+
+    def start_station(self, station_id, input_uri, **kwargs):
+        self.starts.append((station_id, input_uri, kwargs))
+        return self.status(station_id)
+
+
+def test_live_stream_apply_requires_listener_audio_bytes(client, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.api import runtime as runtime_api
+    from app.services import stream_config_service as stream_service
+
+    runtime = _RunningStreamRuntime()
+    monkeypatch.setattr(runtime_api, "runtime_registry", runtime)
+    monkeypatch.setattr(socket, "create_connection", lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr(
+        stream_service,
+        "probe_configured_audio",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=True),
+    )
+    monkeypatch.setenv("CLEANROOM_STREAM_VERIFY_SECONDS", "1")
+
+    draft = client.post(
+        "/api/stream-config/drafts",
+        json={
+            "station_id": 1,
+            "icecast_host": "stream.example.org",
+            "icecast_port": 8000,
+            "icecast_mount": "/verified",
+            "icecast_user": "source",
+            "icecast_password": "protected-secret",
+            "stream_codec_profile": "mp3_128",
+        },
+    ).json()
+    report = client.post(
+        f"/api/stream-config/drafts/{draft['id']}/validate"
+    ).json()
+    assert report["outcome"] == "ready"
+    applied = client.post(
+        f"/api/stream-config/drafts/{draft['id']}/apply",
+        headers={"Idempotency-Key": "listener-audio-success"},
+        json={},
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["result"]["live_output_verified"] is True
+    assert applied.json()["result"]["listener_audio_verified"] is True
+    assert runtime.starts
+
+
+def test_live_stream_apply_rolls_back_when_listener_payload_is_empty(
+    client,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.api import runtime as runtime_api
+    from app.services import stream_config_service as stream_service
+
+    before = client.get("/api/stations/output?station_id=1").json()
+    runtime = _RunningStreamRuntime()
+    monkeypatch.setattr(runtime_api, "runtime_registry", runtime)
+    monkeypatch.setattr(socket, "create_connection", lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr(
+        stream_service,
+        "probe_configured_audio",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=False),
+    )
+    monkeypatch.setenv("CLEANROOM_STREAM_VERIFY_SECONDS", "1")
+
+    draft = client.post(
+        "/api/stream-config/drafts",
+        json={
+            "station_id": 1,
+            "icecast_host": "silent.example.org",
+            "icecast_port": 8000,
+            "icecast_mount": "/silent",
+            "icecast_user": "source",
+            "icecast_password": "protected-secret",
+            "stream_codec_profile": "mp3_128",
+        },
+    ).json()
+    report = client.post(
+        f"/api/stream-config/drafts/{draft['id']}/validate"
+    ).json()
+    assert report["outcome"] == "ready"
+    applied = client.post(
+        f"/api/stream-config/drafts/{draft['id']}/apply",
+        headers={"Idempotency-Key": "listener-audio-empty"},
+        json={},
+    )
+    assert applied.status_code == 400
+    assert "listener_audio_verification_failed" in applied.text
+    after = client.get("/api/stations/output?station_id=1").json()
+    assert after["icecast_host"] == before["icecast_host"], (before, after)
+    assert after["icecast_mount"] == before["icecast_mount"], (before, after)
+    from app.db import get_connection
+
+    conn = get_connection()
+    try:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM station_outputs WHERE station_id=1"
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+
+def test_failed_live_stream_apply_restores_output_and_mirrored_settings(
+    client,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.api import runtime as runtime_api
+    from app.services import stream_config_service as stream_service
+
+    original = {
+        "station_id": 1,
+        "local_output_enabled": False,
+        "output_device_id": "",
+        "icecast_enabled": True,
+        "icecast_host": "original.example.org",
+        "icecast_port": 8443,
+        "icecast_mount": "/original",
+        "icecast_user": "source",
+        "icecast_password": "original-protected-secret",
+        "icecast_tls_enabled": True,
+        "output_gain_db": -3,
+        "stream_codec_profile": "aac_plus_196",
+        "stream_bitrate_kbps": 196,
+    }
+    saved = client.post("/api/stations/output", json=original)
+    assert saved.status_code == 200, saved.text
+    before_output = client.get("/api/stations/output?station_id=1").json()
+    before_settings = client.get("/api/settings/station?station_id=1").json()[
+        "settings"
+    ]
+
+    runtime = _RunningStreamRuntime()
+    monkeypatch.setattr(runtime_api, "runtime_registry", runtime)
+    monkeypatch.setattr(socket, "create_connection", lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr(
+        stream_service,
+        "probe_configured_audio",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=False),
+    )
+    monkeypatch.setenv("CLEANROOM_STREAM_VERIFY_SECONDS", "1")
+
+    draft = client.post(
+        "/api/stream-config/drafts",
+        json={
+            **original,
+            "icecast_host": "silent.example.org",
+            "icecast_port": 8000,
+            "icecast_mount": "/silent",
+            "icecast_password": "replacement-protected-secret",
+            "icecast_tls_enabled": False,
+            "output_gain_db": 2,
+            "stream_codec_profile": "mp3_128",
+        },
+    ).json()
+    assert client.post(
+        f"/api/stream-config/drafts/{draft['id']}/validate"
+    ).json()["outcome"] == "ready"
+    applied = client.post(
+        f"/api/stream-config/drafts/{draft['id']}/apply",
+        headers={"Idempotency-Key": "listener-audio-existing-rollback"},
+        json={},
+    )
+    assert applied.status_code == 400
+
+    after_output = client.get("/api/stations/output?station_id=1").json()
+    after_settings = client.get("/api/settings/station?station_id=1").json()[
+        "settings"
+    ]
+    for key in (
+        "icecast_host",
+        "icecast_port",
+        "icecast_mount",
+        "icecast_user",
+        "icecast_tls_enabled",
+        "output_gain_db",
+        "stream_codec_profile",
+        "stream_bitrate_kbps",
+    ):
+        assert after_output[key] == before_output[key]
+    for key in stream_service._OUTPUT_SETTING_KEYS:
+        assert after_settings.get(key) == before_settings.get(key)
+
+
 def test_stream_validation_blocks_reported_mount_conflict(client, monkeypatch):
     import urllib.request
 
@@ -605,7 +811,12 @@ def test_stream_wizard_markup_is_plain_language_and_accessible():
     assert '<details id="streamAdvancedSettings">' in html
     assert 'id="streamWizardChecks"' in html and 'aria-live="polite"' in html
     assert ">Apply safely</button>" in html
+    assert 'id="reloadBackendButton"' in html
     assert "Ready: every required pre-apply check passed" in script
     assert "Needs attention:" in script
     assert "Unsafe to apply:" in script
     assert "timeoutMs: 75000" in script
+    assert "the listener received audio bytes" in script
+    assert "Listener audio will be verified automatically" in script
+    assert "/api/maintenance/backend/reload" in script
+    assert "previous_backend_instance_id" in script

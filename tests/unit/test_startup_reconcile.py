@@ -22,7 +22,7 @@ def test_app_startup_reconciles_stale_playing_queue_items(tmp_path, monkeypatch)
     cur.execute("SELECT status FROM queue_items WHERE id=?", (item_id,))
     row = cur.fetchone()
     assert row is not None
-    assert row["status"] == "failed"
+    assert row["status"] == "pending"
 
 
 def test_app_startup_backfills_missing_track_durations(tmp_path, monkeypatch):
@@ -46,7 +46,7 @@ def test_app_startup_backfills_missing_track_durations(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "app.engine.playout_state.audio_processing.probe_duration",
-        lambda file_path: 301.5 if str(file_path) == str(audio_file) else 0.0,
+        lambda file_path, **_kwargs: 301.5 if str(file_path) == str(audio_file) else 0.0,
     )
 
     with TestClient(app) as client:

@@ -344,10 +344,9 @@ def _scrub_secret(value: Any, secret: Any) -> str:
 def _icecast_test_protocol_args(output: dict[str, Any]) -> list[str]:
     """Match the production Icecast transport flags during connection tests."""
     args: list[str] = []
-    port = _safe_int(output.get("icecast_port", 8000), 8000)
     if _truthy(output.get("icecast_tls_enabled", False)):
         args.extend(["-tls", "1"])
-    if port not in (80, 443):
+    if _truthy(output.get("icecast_legacy_source_enabled", False)):
         args.extend(["-legacy_icecast", "1"])
     return args
 

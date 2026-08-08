@@ -174,6 +174,20 @@ def test_build_ffmpeg_icecast_sink_cmd_reads_raw_pcm_from_stdin() -> None:
     assert "artist=Artist B" not in joined
 
 
+def test_nonstandard_port_does_not_force_legacy_icecast_protocol() -> None:
+    cfg = _cfg()
+    cfg.icecast_port = 11154
+    cmd = build_ffmpeg_icecast_sink_cmd(cfg, "ffmpeg.exe")
+    assert "-legacy_icecast" not in cmd
+
+
+def test_legacy_icecast_protocol_requires_explicit_station_setting() -> None:
+    cfg = _cfg()
+    cfg.icecast_legacy_source_enabled = True
+    cmd = build_ffmpeg_icecast_sink_cmd(cfg, "ffmpeg.exe")
+    assert cmd[cmd.index("-legacy_icecast") + 1] == "1"
+
+
 def test_build_ffmpeg_local_pcm_cmd_writes_raw_pcm_to_stdout() -> None:
     cmd = build_ffmpeg_local_pcm_cmd(_cfg(input_uri="C:/music/current.mp3"), "ffmpeg.exe")
 

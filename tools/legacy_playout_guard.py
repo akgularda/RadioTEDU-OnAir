@@ -17,6 +17,9 @@ LIVE_ROOT = (
 )
 SHARED_CONFIG_ROOT = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "RadioTEDU" / "OnAir"
 JWT_SECRET_FILE = Path(os.environ.get("RADIOTEDU_JWT_SECRET_FILE", r"C:\Users\tedu\AppData\Local\RadioTEDU\OnAir\secrets\jwt-signing.key"))
+STABLE_BACKEND_EXE = Path(
+    os.environ.get("RADIOTEDU_STABLE_BACKEND_EXE", "")
+).expanduser()
 os.environ.setdefault("CLEANROOM_USER_CONFIG_ROOT", str(SHARED_CONFIG_ROOT))
 os.environ.setdefault("CLEANROOM_JWT_SECRET_FILE", str(JWT_SECRET_FILE))
 DB_PATH = LIVE_ROOT / "cleanroom.db"
@@ -44,6 +47,8 @@ EMERGENCY_FALLBACK_GRACE_SEC = 20.0
 EMERGENCY_FALLBACK_INTERVAL_SEC = 30.0
 FALLBACK_CONTENT_RECOVERY_INTERVAL_SEC = 15.0
 HEALTH_LOG_INTERVAL_SEC = 60.0
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
 os.environ.setdefault("LOCALAPPDATA", str(LIVE_ROOT.parent))
 os.environ.setdefault("CLEANROOM_DB_PATH", str(DB_PATH))
@@ -52,14 +57,35 @@ os.environ.setdefault("CLEANROOM_TOOLS_DIR", str(LIVE_ROOT / "tools"))
 sys.path.insert(0, str(APP_INTERNAL))
 import requests  # noqa: E402
 from app.auth.jwt_handler import create_access_token  # noqa: E402
+from app.services.backend_reload_control import (  # noqa: E402
+    consume_due_reload_request,
+    new_supervisor_token,
+    publish_supervisor_capability,
+)
 
 _LOCK_HANDLE = None
+
+
+class BackendRestartRequired(RuntimeError):
+    """Raised when a live backend can answer HTTP but a playout worker is frozen."""
 
 
 def log(message: str) -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size >= LOG_MAX_BYTES:
+            oldest = LOG_PATH.with_name(f"{LOG_PATH.name}.{LOG_BACKUP_COUNT}")
+            try:
+                oldest.unlink()
+            except FileNotFoundError:
+                pass
+            for index in range(LOG_BACKUP_COUNT - 1, 0, -1):
+                source = LOG_PATH.with_name(f"{LOG_PATH.name}.{index}")
+                target = LOG_PATH.with_name(f"{LOG_PATH.name}.{index + 1}")
+                if source.exists():
+                    source.replace(target)
+            LOG_PATH.replace(LOG_PATH.with_name(f"{LOG_PATH.name}.1"))
         with LOG_PATH.open("a", encoding="utf-8") as fh:
             fh.write(f"{stamp} {message}\n")
     except Exception:
@@ -153,8 +179,12 @@ def _backend_process_ids() -> list[int]:
     if sys.platform != "win32":
         return []
     command = (
-        "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*uvicorn app.main:app*' } | "
+        "$portPids = @(Get-NetTCPConnection -LocalPort 8100 -State Listen "
+        "-ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess); "
+        "Get-CimInstance Win32_Process | Where-Object { "
+        "$portPids -contains $_.ProcessId -or "
+        "(($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and "
+        "$_.CommandLine -like '*uvicorn app.main:app*') } | "
         "ForEach-Object { $_.ProcessId }"
     )
     try:
@@ -209,7 +239,8 @@ def start_backend() -> int | None:
     env["CLEANROOM_JWT_SECRET_FILE"] = str(JWT_SECRET_FILE)
     # Keep recovery startups short so the guard can bring streams back even
     # when AI preload or prefetch would otherwise stall the backend.
-    env["CLEANROOM_FAST_STARTUP"] = "1"
+    env.pop("CLEANROOM_FAST_STARTUP", None)
+    env["CLEANROOM_SKIP_STARTUP_AI"] = "1"
     env["PYTHONPATH"] = str(APP_INTERNAL)
     env["PYTHONUTF8"] = "1"
     env["RADIOTEDU_WEBSOCKET_ENABLED"] = "0"
@@ -220,8 +251,11 @@ def start_backend() -> int | None:
     # Python tree can survive an upgrade under %LocalAppData% and otherwise
     # shadows the current operator routes/static wall assets.
     backend_exe = ROOT / "RadioTEDU-OnAir-Backend.exe"
-    if backend_exe.is_file():
-        cmd = [str(backend_exe), "--lifespan", "off"]
+    if str(STABLE_BACKEND_EXE) and STABLE_BACKEND_EXE.is_file():
+        cmd = [str(STABLE_BACKEND_EXE), "--lifespan", "on"]
+        cwd = STABLE_BACKEND_EXE.parent
+    elif backend_exe.is_file():
+        cmd = [str(backend_exe), "--lifespan", "on"]
         cwd = ROOT
     elif (APP_INTERNAL / "app" / "main.py").is_file():
         cmd = [
@@ -236,11 +270,11 @@ def start_backend() -> int | None:
             "--ws",
             "none",
             "--lifespan",
-            "off",
+            "on",
         ]
         cwd = APP_INTERNAL
     else:
-        cmd = [str(backend_exe), "--lifespan", "off"]
+        cmd = [str(backend_exe), "--lifespan", "on"]
         cwd = ROOT
 
     process = subprocess.Popen(
@@ -526,6 +560,30 @@ def ensure_backend(state: dict) -> bool:
     return False
 
 
+def process_supervised_reload_request(state: dict, supervisor_token: str) -> bool:
+    request = consume_due_reload_request(supervisor_token)
+    if request is None:
+        return False
+    request_id = str(request.get("request_id") or "unknown")
+    previous_instance = str(request.get("backend_instance_id") or "unknown")
+    log(
+        "backend-reload accepted "
+        f"request_id={request_id} previous_instance={previous_instance}"
+    )
+    stop_backend_processes()
+    now = time.monotonic()
+    state["last_backend_start"] = now
+    state["backend_starting_since"] = now
+    state["backend_bad_since"] = None
+    state["backend_last_status"] = "reloading"
+    state["backend_pid"] = start_backend()
+    log(
+        "backend-reload started "
+        f"request_id={request_id} pid={state['backend_pid']}"
+    )
+    return True
+
+
 def ensure_worker_loop(station_id: int, station_state: dict, loop_payload: dict) -> dict:
     if bool(loop_payload.get("running", False)):
         station_state["loop_bad_since"] = None
@@ -591,6 +649,11 @@ def supervise_station(station_id: int, station_state: dict) -> None:
         return
     loop_payload = api_get(f"/api/runtime/{int(station_id)}/loop/status")
     loop_payload = ensure_worker_loop(station_id, station_state, loop_payload)
+    if bool(loop_payload.get("stalled", False)):
+        elapsed = float(loop_payload.get("tick_elapsed_seconds") or 0.0)
+        raise BackendRestartRequired(
+            f"station={int(station_id)} worker_tick_stalled_seconds={elapsed:.1f}"
+        )
     runtime = loop_payload.get("runtime")
     if not isinstance(runtime, dict):
         runtime = api_get(f"/api/runtime/{int(station_id)}/status")
@@ -632,6 +695,7 @@ def main() -> int:
         log("playout guard already running; duplicate exiting")
         return 0
     log("playout guard starting supervisor mode")
+    supervisor_token = new_supervisor_token()
     state = {
         "last_backend_start": 0.0,
         "backend_bad_since": None,
@@ -642,11 +706,43 @@ def main() -> int:
 
     while True:
         try:
+            publish_supervisor_capability(
+                supervisor_token,
+                supervisor_pid=os.getpid(),
+            )
+            if process_supervised_reload_request(state, supervisor_token):
+                time.sleep(POLL_SEC)
+                continue
             if ensure_backend(state):
                 for station_id in supervised_station_ids():
                     station_state = state["stations"].setdefault(int(station_id), default_station_state())
                     try:
                         supervise_station(int(station_id), station_state)
+                    except BackendRestartRequired as exc:
+                        # A wedged Python thread cannot be killed safely in
+                        # process.  The external supervisor is the containment
+                        # boundary: restart the backend, then startup reconcile
+                        # restores the playing row to the front of its queue.
+                        log(f"backend-restart-required reason={exc}")
+                        stop_backend_processes()
+                        now = time.monotonic()
+                        state["last_backend_start"] = now
+                        state["backend_starting_since"] = now
+                        state["backend_bad_since"] = None
+                        state["backend_last_status"] = "worker-stalled"
+                        state["stations"] = {}
+                        try:
+                            state["backend_pid"] = start_backend()
+                            log(
+                                "backend-restarted-after-worker-stall "
+                                f"pid={state['backend_pid']}"
+                            )
+                        except Exception as start_exc:
+                            log(
+                                "backend-restart-after-worker-stall-failed "
+                                f"error={start_exc}"
+                            )
+                        break
                     except Exception as exc:
                         log(f"station-cycle error station={station_id} error={exc}")
         except Exception as exc:

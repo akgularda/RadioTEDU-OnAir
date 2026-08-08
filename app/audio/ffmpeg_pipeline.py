@@ -78,10 +78,9 @@ def _icecast_output_args(cfg: StationPipelineConfig) -> list[str]:
 
 def _icecast_protocol_args(cfg: StationPipelineConfig) -> list[str]:
     args: list[str] = []
-    port = int(cfg.icecast_port)
     if bool(getattr(cfg, "icecast_tls_enabled", False)):
         args.extend(["-tls", "1"])
-    if port not in (80, 443):
+    if bool(getattr(cfg, "icecast_legacy_source_enabled", False)):
         args.extend(["-legacy_icecast", "1"])
     user_agent = _normalize_metadata_value(
         str(getattr(cfg, "icecast_user_agent", "") or "")

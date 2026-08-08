@@ -37,6 +37,17 @@ def _seed_public_station_state(tmp_path, monkeypatch):
             "VALUES (?, ?, ?, 'playing', CURRENT_TIMESTAMP)",
             (live_station_id, track_id, 1),
         )
+        cur.execute(
+            "INSERT INTO tracks (station_id, title, artist, duration, track_type, is_active, file_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (offline_station_id, "Preserved Song", "Queue Artist", 120.0, "music", 1, "C:/music/preserved.mp3"),
+        )
+        offline_track_id = int(cur.lastrowid)
+        cur.execute(
+            "INSERT INTO queue_items (station_id, track_id, position, status, started_at) "
+            "VALUES (?, ?, ?, 'playing', CURRENT_TIMESTAMP)",
+            (offline_station_id, offline_track_id, 1),
+        )
 
         show_repo = ShowRepository(conn)
         show_id = show_repo.create(live_station_id, "Morning Drive")
@@ -139,6 +150,7 @@ def test_public_station_summary_is_unauthenticated_and_public_safe(tmp_path, mon
         "status",
         "status_reason",
         "now_playing",
+        "preserved_item",
         "active_show_name",
     }
     for item in stations:
@@ -148,7 +160,11 @@ def test_public_station_summary_is_unauthenticated_and_public_safe(tmp_path, mon
     assert degraded["status"] == "degraded"
     assert offline["status"] == "offline"
     assert live["now_playing"] is not None
+    assert live["preserved_item"] is None
     assert str(live["now_playing"]["started_at"]).endswith("Z")
+    assert degraded["now_playing"] is None
+    assert offline["now_playing"] is None
+    assert offline["preserved_item"]["title"] == "Preserved Song"
     assert live["active_show_name"] == "Morning Drive"
     assert degraded["active_show_name"] is None
     assert offline["active_show_name"] is None

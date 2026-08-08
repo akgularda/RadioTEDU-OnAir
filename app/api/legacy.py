@@ -410,6 +410,14 @@ def _serialize_ytdlp_job(job: dict, queue_position: int | None = None, include_r
 _log = logging.getLogger("cleanroom.ytdlp")
 
 
+def _clean_artist_metadata(value: object) -> str:
+    artist = str(value or "").strip()
+    normalized = " ".join(artist.lower().replace("_", " ").replace("-", " ").split())
+    if normalized in {"stream error", "metadata error", "ffprobe error"}:
+        return ""
+    return artist
+
+
 def _get_audio_metadata(
     file_path: str,
     *,
@@ -424,12 +432,20 @@ def _get_audio_metadata(
             raise RuntimeError("ffprobe is unavailable; cannot verify audio playability")
         return {
             "title": str(fallback_title or "").strip(),
-            "artist": str(fallback_artist or "").strip(),
+            "artist": _clean_artist_metadata(fallback_artist),
+            "album": "",
+            "genre": "",
+            "language": "",
+            "musicbrainz_recordingid": "",
             "duration": 0.0,
         }
 
     title = str(fallback_title or "").strip()
-    artist = str(fallback_artist or "").strip()
+    artist = _clean_artist_metadata(fallback_artist)
+    album = ""
+    genre = ""
+    language = ""
+    musicbrainz_recordingid = ""
     duration = 0.0
 
     try:
@@ -445,7 +461,15 @@ def _get_audio_metadata(
             if require_playable:
                 detail = str(result.stderr or "").strip()
                 raise ValueError(detail or "ffprobe rejected the audio file")
-            return {"title": title, "artist": artist, "duration": duration}
+            return {
+                "title": title,
+                "artist": artist,
+                "album": album,
+                "genre": genre,
+                "language": language,
+                "musicbrainz_recordingid": musicbrainz_recordingid,
+                "duration": duration,
+            }
 
         info = json.loads(result.stdout or "{}")
         format_info = info.get("format", {}) or {}
@@ -474,6 +498,15 @@ def _get_audio_metadata(
             or tags.get("composer")
             or artist
         )
+        artist = _clean_artist_metadata(artist)
+        album = tags.get("album") or album
+        genre = tags.get("genre") or genre
+        language = tags.get("language") or tags.get("contentlanguage") or language
+        musicbrainz_recordingid = (
+            tags.get("musicbrainz_recordingid")
+            or tags.get("musicbrainz_trackid")
+            or musicbrainz_recordingid
+        )
     except Exception:
         if require_playable:
             raise
@@ -481,6 +514,10 @@ def _get_audio_metadata(
     return {
         "title": title,
         "artist": artist,
+        "album": album,
+        "genre": genre,
+        "language": language,
+        "musicbrainz_recordingid": musicbrainz_recordingid,
         "duration": duration,
     }
 
@@ -3989,12 +4026,28 @@ def _sync_station_library_folder_with_connection(
                 else:
                     retained += 1
                 conn.execute(
-                    "UPDATE tracks SET file_path=?, track_type=?, is_active=1, duration=?, "
+                    "UPDATE tracks SET title=?, artist=?, "
+                    "album=CASE WHEN ?<>'' THEN ? ELSE album END, "
+                    "file_path=?, track_type=?, is_active=1, duration=?, "
                     "genre=CASE WHEN ?<>'' THEN ? ELSE genre END, "
-                    "language=CASE WHEN ?<>'' THEN ? ELSE language END WHERE id=?",
+                    "language=CASE WHEN ?<>'' THEN ? ELSE language END, "
+                    "musicbrainz_recordingid=CASE WHEN ?<>'' THEN ? ELSE musicbrainz_recordingid END "
+                    "WHERE id=?",
                     (
-                        str(path), kind, float(metadata.get("duration") or 0.0), default_genre, default_genre,
-                        default_language, default_language, track_id,
+                        str(metadata.get("title") or path.stem or "Track"),
+                        str(metadata.get("artist") or ""),
+                        str(metadata.get("album") or "").strip(),
+                        str(metadata.get("album") or "").strip(),
+                        str(path),
+                        kind,
+                        float(metadata.get("duration") or 0.0),
+                        str(metadata.get("genre") or default_genre).strip(),
+                        str(metadata.get("genre") or default_genre).strip(),
+                        str(metadata.get("language") or default_language).strip(),
+                        str(metadata.get("language") or default_language).strip(),
+                        str(metadata.get("musicbrainz_recordingid") or "").strip(),
+                        str(metadata.get("musicbrainz_recordingid") or "").strip(),
+                        track_id,
                     ),
                 )
                 for duplicate in matches[1:]:
@@ -4006,17 +4059,20 @@ def _sync_station_library_folder_with_connection(
 
             cursor = conn.execute(
                 "INSERT INTO tracks "
-                "(station_id, title, artist, genre, language, track_type, file_path, is_active, duration, bpm) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)",
+                "(station_id, title, artist, album, genre, language, track_type, file_path, "
+                "is_active, duration, bpm, musicbrainz_recordingid) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?)",
                 (
                     sid,
                     str(metadata.get("title") or path.stem or "Track"),
                     str(metadata.get("artist") or ""),
-                    default_genre,
-                    default_language,
+                    str(metadata.get("album") or "").strip(),
+                    str(metadata.get("genre") or default_genre).strip(),
+                    str(metadata.get("language") or default_language).strip(),
                     kind,
                     str(path),
                     float(metadata.get("duration") or 0.0),
+                    str(metadata.get("musicbrainz_recordingid") or "").strip(),
                 ),
             )
             target_track_ids.append(int(cursor.lastrowid))

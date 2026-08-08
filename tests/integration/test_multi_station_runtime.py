@@ -11,7 +11,7 @@ class _FakeRuntime:
     def __init__(self):
         self.started = False
 
-    def start(self, cfg):
+    def start(self, cfg, **_kwargs):
         self.started = True
 
     def stop(self):

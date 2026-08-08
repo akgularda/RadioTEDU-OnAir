@@ -102,6 +102,7 @@ def login(payload: LoginPayload, request: Request):
     try:
         users = UserRepository(conn)
         sessions = SessionRepository(conn)
+        sessions.cleanup_expired()
         user = users.get_user_by_username(username)
         if user is None or int(user["is_active"]) != 1:
             brute_force.record_failure(username)
@@ -157,13 +158,13 @@ def refresh(payload: RefreshPayload, request: Request):
             raise HTTPException(status_code=401, detail="Invalid refresh token")
         resolved_user = build_auth_user_payload(user, conn=conn)
 
-        sessions.revoke_session(int(session["id"]))
         next_refresh_token = create_refresh_token(int(user["id"]))
+        sessions.revoke_session(int(session["id"]))
         sessions.create_session(
             user_id=int(user["id"]),
             refresh_token=next_refresh_token,
-            device_info=str(session["device_info"] or request.headers.get("user-agent", "")),
-            ip_address=str(session["ip_address"] or getattr(request.client, "host", "")),
+            device_info=str(request.headers.get("user-agent", "") or ""),
+            ip_address=str(getattr(request.client, "host", "") or ""),
             expires_at=_refresh_expiry_text(),
         )
         return {

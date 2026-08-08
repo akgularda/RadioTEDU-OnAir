@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from app.audio import audio_processing
@@ -71,7 +72,8 @@ class PlayoutStateService:
         cur = self.conn.cursor()
         previous = self.get_current(int(station_id))
         cur.execute(
-            "UPDATE queue_items SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE station_id=? AND status='playing'",
+            "UPDATE queue_items SET status='pending', started_at=NULL, finished_at=NULL "
+            "WHERE station_id=? AND status='playing'",
             (station_id,),
         )
         cur.execute(
@@ -98,10 +100,17 @@ def _backfill_missing_track_durations(conn) -> int:
     cur.execute(
         "SELECT id, COALESCE(file_path, '') AS file_path "
         "FROM tracks "
-        "WHERE is_active=1 AND COALESCE(duration, 0) <= 0 AND TRIM(COALESCE(file_path, '')) <> ''"
+        "WHERE is_active=1 AND COALESCE(duration, 0) <= 0 AND TRIM(COALESCE(file_path, '')) <> '' "
+        "ORDER BY CASE WHEN EXISTS ("
+        "SELECT 1 FROM queue_items q WHERE q.track_id=tracks.id AND q.status IN ('pending', 'playing')"
+        ") THEN 0 ELSE 1 END, id LIMIT 64"
     )
     updated = 0
+    deadline = time.monotonic() + 10.0
     for row in cur.fetchall():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
         raw_path = str(row["file_path"] or "").strip()
         resolved_path = resolve_runtime_media_path(raw_path)
         if not resolved_path or "://" in resolved_path:
@@ -109,7 +118,12 @@ def _backfill_missing_track_durations(conn) -> int:
         candidate = Path(resolved_path)
         if not candidate.is_file():
             continue
-        duration = float(audio_processing.probe_duration(str(candidate)))
+        duration = float(
+            audio_processing.probe_duration(
+                str(candidate),
+                timeout_seconds=min(3.0, remaining),
+            )
+        )
         if duration <= 0:
             continue
         cur.execute(
@@ -128,15 +142,16 @@ def reconcile_all_startup(conn) -> dict[str, int]:
     )
     stale_playout = list(cur.fetchall())
     cur.execute(
-        "UPDATE queue_items SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE status='playing'"
+        "UPDATE queue_items SET status='pending', started_at=NULL, finished_at=NULL "
+        "WHERE status='playing'"
     )
-    queue_failed = int(cur.rowcount or 0)
+    queue_requeued = int(cur.rowcount or 0)
 
-    cur.execute("UPDATE ad_break_items SET status='failed' WHERE status='playing'")
-    ad_failed = int(cur.rowcount or 0)
+    cur.execute("UPDATE ad_break_items SET status='pending' WHERE status='playing'")
+    ad_requeued = int(cur.rowcount or 0)
 
-    cur.execute("UPDATE schedule_items SET status='failed' WHERE status='playing'")
-    schedule_failed = int(cur.rowcount or 0)
+    cur.execute("UPDATE schedule_items SET status='pending' WHERE status='playing'")
+    schedule_requeued = int(cur.rowcount or 0)
 
     cur.execute(
         "UPDATE playout_state SET current_source='none', current_item_id=NULL, updated_at=CURRENT_TIMESTAMP "
@@ -170,9 +185,9 @@ def reconcile_all_startup(conn) -> dict[str, int]:
 
     conn.commit()
     return {
-        "queue_failed": queue_failed,
-        "ad_failed": ad_failed,
-        "schedule_failed": schedule_failed,
+        "queue_requeued": queue_requeued,
+        "ad_requeued": ad_requeued,
+        "schedule_requeued": schedule_requeued,
         "playout_reset": playout_reset,
         "show_sessions_ended": show_sessions_ended,
         "track_durations_backfilled": track_durations_backfilled,

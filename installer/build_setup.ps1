@@ -196,9 +196,9 @@ function Resolve-BackendArtifactPath {
 }
 
 function Ensure-PythonRequirements {
-    $requirementsPath = Join-Path $root "..\requirements.txt"
+    $requirementsPath = Join-Path $root "..\requirements.lock"
     if (-not (Test-Path $requirementsPath)) {
-        throw "Python requirements file not found: $requirementsPath"
+        throw "Locked Python requirements file not found: $requirementsPath"
     }
 
     $pythonInstall = Resolve-PythonInstallCommand
@@ -207,8 +207,8 @@ function Ensure-PythonRequirements {
         $displayName = "$displayName $($pythonInstall.PrefixArgs -join ' ')"
     }
 
-    Write-Host "Installing Python requirements via $displayName -m pip install -r $requirementsPath"
-    & $pythonInstall.Command @($pythonInstall.PrefixArgs) -m pip install -r $requirementsPath | Out-Host
+    Write-Host "Installing locked Python requirements via $displayName -m pip install -r $requirementsPath"
+    & $pythonInstall.Command @($pythonInstall.PrefixArgs) -m pip install --only-binary=:all: -r $requirementsPath | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Python requirements installation failed."
     }
